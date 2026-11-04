@@ -2,6 +2,11 @@
 
 AI 국내 여행·데이트 코스 플래너. 기획은 [PLAN.md](PLAN.md) 참고.
 
+**팀 문서 (먼저 읽기)**
+- [docs/HANDOVER.md](docs/HANDOVER.md) — 인수인계 (주차 시작 전 필독)
+- [docs/TEAM_ROLES.md](docs/TEAM_ROLES.md) — 주차별 역할·일정·체크리스트
+- [docs/DATA_AND_API.md](docs/DATA_AND_API.md) — 발급할 API 키, 모을 데이터 목록
+
 - 백엔드: Python / FastAPI / LangGraph (`odiro/`)
 - 프론트: React + TypeScript (Vite) + Kakao Map JS (`frontend/`)
 - 배포: 프론트 → Firebase Hosting, 백엔드 → Cloud Run (Docker)
@@ -40,6 +45,8 @@ gcloud run deploy odiro-api --source . --region asia-northeast3 --project odiro-
 cd frontend && npm run build && firebase deploy --only hosting --project odiro-where
 ```
 
+- **자동 배포**: `bash scripts/setup_ci.sh` 를 1회 실행하면 이후 `main` push 시 GitHub Actions 가 위 두 배포를 대신 한다 (`.github/workflows/`). 켜기 전까지 push 는 사이트에 반영되지 않는다.
+
 - 시연 당일만 콜드스타트 방지로 `--min-instances 1` 을 켜고, 끝나면 반드시 0으로 되돌린다 (1로 두면 월 1~2만 원).
 - 결제 계정에 월 5,000원 예산 알림이 걸려 있다.
 
@@ -62,6 +69,8 @@ trip/
 ├─ data/vectorstore/      # Chroma (git 제외)
 ├─ cache/                 # API 응답 캐시 (git 제외)
 ├─ scripts/check_apis.py  # Phase 0 API 점검
+├─ scripts/setup_ci.sh    # GitHub Actions 자동 배포 활성화 (1회)
+├─ docs/                  # 인수인계·역할·데이터/API 문서
 ├─ tests/
 ├─ Dockerfile             # 백엔드 이미지
 └─ PLAN.md
