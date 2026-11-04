@@ -1,0 +1,27 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# data / cache (gitkeep 만 유지)
+data/raw/*
+!data/raw/.gitkeep
+data/vectorstore/*
+!data/vectorstore/.gitkeep
+cache/*
+!cache/.gitkeep
+
+# os / ide
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
