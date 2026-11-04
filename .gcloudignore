@@ -1,0 +1,15 @@
+.git
+.env
+**/.env
+.venv
+venv
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+frontend
+tests
+data/raw/*
+!data/raw/.gitkeep
+cache/*
+!cache/.gitkeep

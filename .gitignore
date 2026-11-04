@@ -2,7 +2,6 @@
 .env
 frontend/.env
 frontend/.env.local
-.firebaserc
 
 # python
 __pycache__/
