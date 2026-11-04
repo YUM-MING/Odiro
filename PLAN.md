@@ -73,9 +73,13 @@
 ## 5. 시스템 아키텍처
 
 ```
-[Streamlit UI]
+[React 프론트 (Vite + TS, Firebase Hosting)]
+ ├─ 인트로: Kakao Map JS 줌아웃 애니메이션 + BGM
  ├─ 좌: 조건 빌더(태그/슬라이더) + 채팅창
- └─ 우: 지도(핀 + 동선) + 핀 클릭 팝업
+ └─ 우: Kakao Map JS 지도(핀 + 동선) + 핀 클릭 팝업
+        │  REST + SSE(진행 상태 스트리밍)
+        ▼
+[FastAPI 백엔드 (Cloud Run, Docker)]
         │
         ▼
 [LangGraph 에이전트]  ← LangChain Tools
@@ -102,6 +106,20 @@
 | **B. 감성 큐레이션(RAG)** | "어떤 분위기인가" | 네이버 블로그 검색 API(공식), 지자체 관광 사이트(비짓서울·비짓제주 등), 매거진 데이트코스 글, 블루리본 | 분위기 태그를 LLM으로 사전 라벨링해서 메타데이터로 저장 |
 | **C. 실시간 검증** | "지금 존재·영업하나" | Kakao Local API + Tavily 검색 | 호출 시점에 조회, 캐시 |
 
+#### 전국 커버리지 전략 (가능함, 단 "전수 수집"과 "지연 로딩"을 나눈다)
+
+| 데이터 | 전국 범위 | 방법 | 병목 |
+|---|---|---|---|
+| TourAPI 장소 메타(이름·좌표·카테고리·주소·대표사진) | 17개 시도 전체, 약 5~6만 건 | `areaBasedList2`를 시도×콘텐츠타입별로 페이지네이션 (`numOfRows=1000`) → 100회 미만 호출로 전수 수집 가능 | 없음 |
+| TourAPI 상세 설명(`detailCommon2` overview) | 건당 1회 호출 필요 → 전수는 5~6만 회 | 운영계정 트래픽 증량 신청(일 수만 건) 후 며칠에 걸쳐 수집, 또는 **코스 생성 시 후보 장소만 지연 호출 + 캐시** | 개발계정은 일 1,000건 → 반드시 증량 신청 |
+| 네이버 블로그 큐레이션 글 | 229개 시군구 × 테마 10개 ≈ 2,300 쿼리, 쿼리당 최대 100건 | 공식 API 일 25,000회 한도 안에서 하루에 수집 가능 | 광고 글 필터링 품질 |
+| 분위기 태그 라벨링 | 블로그 글 ~20만 건 기준 | 저가 모델로 배치 라벨링 (수십 달러 수준) 또는 임베딩 유사도 기반 제로샷 분류(거의 무료) | LLM 비용 |
+| 임베딩·벡터DB | 20~30만 청크 | `text-embedding-3-small` 기준 수 달러, Chroma 로컬에서 충분 | 없음 |
+| Kakao Local 검증 | 코스 생성 시 후보 5~10건만 호출 | 일 30만 회 무료 한도 → 전국 서비스해도 여유 | 없음 |
+| 길찾기(Kakao Mobility / Tmap) | 코스당 구간 3~6회 | 무료 쿼터 안에서 캐시로 운영, 초과 시 직선거리 추정 폴백 | 일일 쿼터 |
+| 일출·일몰 / 날씨 | 좌표 기반이라 전국 동일 | astral 오프라인 계산 / OpenWeather 좌표 호출 | 없음 |
+
+- **순서**: 시연 지역 3곳(성수·강릉·전주)을 먼저 상세까지 완성 → 전국 메타데이터 전수 수집 → 상세·태그는 지역별로 확장. 이렇게 하면 "전국 어디를 입력해도 동작"은 처음부터 보장되고, 품질은 점진적으로 올라간다.
 - **인스타그램·캐치테이블·테이블링 직접 크롤링은 하지 않는다** (약관 위반 + 차단 위험 = 시연 불안정). "웨이팅 적은"은 블로그 리뷰 텍스트에서 LLM이 추출한 태그로 대체하고, 예약은 링크 아웃으로 처리.
 
 ### 5-2. 분위기 클래스 (태그 체계)
@@ -164,7 +182,7 @@ class CourseState(TypedDict):
 1. **인트로 화면** (창의성·전달력용, 마지막 단계에 구현)
    - 전국 지도에서 줌아웃 애니메이션 + "오늘의 추천 지역" 하이라이트 (선거 개표 방송 느낌으로 지역별 색 채워짐)
    - BGM은 브라우저 자동재생 정책 때문에 **"시작하기" 버튼 클릭 후 재생**
-   - 구현: `st.components.v1.html`에 Kakao Map JS SDK + CSS 애니메이션 + `<audio>`
+   - 구현: React 컴포넌트에서 Kakao Map JS SDK `setLevel` 애니메이션 + CSS 전환 + `<audio>`
 2. **조건 빌더**
    - 모드(나들이/여행) → 이동수단(뚜벅이/자차) → 지역 → 날짜·시간 → 예산 슬라이더 → 분위기 태그(다중) → 자유 텍스트
    - 아이콘 사용 (🚶🚗🍽☕🎡🌅)
@@ -177,10 +195,16 @@ class CourseState(TypedDict):
 
 ### 6-2. 기술 선택
 
-- **Streamlit** 채택 이유: 요구사항 명시 + 팀 전원이 파이썬으로 작업 가능 + LangGraph와 같은 프로세스
-- 지도: `streamlit-folium` (핀 클릭 이벤트를 파이썬으로 받을 수 있음) → 팝업·동선·클릭 모두 처리
-- 인트로만 Kakao JS SDK 임베드 (애니메이션 때문)
-- 대안: 시간 남으면 FastAPI + React로 교체 가능하도록 에이전트 로직을 UI와 분리
+- **FastAPI + React (Vite + TypeScript)** 채택. 평가표의 "Web" 인터페이스에 해당
+  - 이유: 인트로 애니메이션·지도 인터랙션(핀 클릭, 동선 그리기, 실시간 갱신)은 Streamlit 리런 모델로는 어색하고, 실제 웹사이트로 배포해야 하므로 처음부터 웹 스택으로 감
+  - 백엔드: FastAPI가 LangGraph를 감싸고, 노드 진행 상태는 SSE로 프론트에 스트리밍 (사이드바 진행 표시용)
+  - 지도: Kakao Map JS SDK 직접 사용 (핀, 폴리라인, 커스텀 오버레이 팝업). 백엔드는 좌표·폴리라인 JSON만 내려줌
+  - 상태 관리: 코스 JSON을 프론트 state로 들고, 수정 요청 시 `POST /api/course/edit` 로 교체된 코스만 받아 지도 갱신
+- **배포**
+  - 프론트: `npm run build` → Firebase Hosting (무료, 정적 파일, CDN)
+  - 백엔드: Dockerfile → Google Cloud Run (asia-northeast3 서울, 요청 없을 땐 과금 0). Firebase Hosting 의 `/api/**` rewrite 로 같은 도메인에서 호출 → CORS 문제 없음
+  - 시연 당일 대비: 콜드스타트 방지를 위해 Cloud Run 최소 인스턴스 1로 올려두거나, 발표 노트북에서 로컬 백엔드 실행
+  - Firebase 는 "정적 호스팅"만 가능하고 Python 서버를 못 돌린다. 그래서 백엔드는 반드시 Cloud Run(또는 Railway/Render) 이 필요
 
 ---
 
@@ -196,7 +220,7 @@ class CourseState(TypedDict):
 | 기술 통합·자동화 | 10 | 검색→검증→동선→요약→날씨전환이 한 요청에 자동 연결 | 시연 중 사이드바에 노드 진행 상태 실시간 표시 |
 | UI·UX | 10 | 스플릿 뷰, 아이콘, 핀 팝업, 빠른 수정 버튼 | 화면 녹화 |
 | 사용자 중심성 | 10 | 뚜벅이↔자차, 나들이↔여행, 분위기 바꾸면 결과가 눈에 띄게 달라짐 | 시연에서 **같은 지역·다른 조건 2회** 연속 실행 |
-| 창의성·확장성 | 5 | 인트로 애니메이션, 리뷰 조건별 요약, 날씨 실내 전환, Docker 배포 | Dockerfile + Streamlit Cloud 배포 URL |
+| 창의성·확장성 | 5 | 인트로 애니메이션, 리뷰 조건별 요약, 날씨 실내 전환, Docker 배포 | Dockerfile + Firebase Hosting/Cloud Run 배포 URL |
 
 ### Ⅰ. 발표·시연 (50)
 
@@ -231,7 +255,8 @@ class CourseState(TypedDict):
 - 폴더 구조
   ```
   trip/
-  ├─ app/            # Streamlit UI
+  ├─ odiro/api/      # FastAPI 엔드포인트
+  ├─ frontend/       # React (Vite + TS) + firebase.json
   ├─ agent/          # LangGraph 그래프, 노드, 상태
   ├─ tools/          # search_place, get_route, get_sun_times, get_weather, rag_search, summarize_reviews
   ├─ data/
@@ -256,7 +281,8 @@ class CourseState(TypedDict):
 - 산출물: 터미널에서 코스 생성 성공, 할루시네이션 장소 0건
 
 ### Phase 3 — UI 연결 (1주)
-- Streamlit 조건 빌더 + 채팅 + folium 지도 스플릿 뷰
+- FastAPI `POST /api/course`, `POST /api/course/edit`, SSE 진행 상태 엔드포인트
+- React 조건 빌더 + 채팅 + Kakao Map JS 지도 스플릿 뷰
 - 핀 클릭 팝업, 동선 폴리라인, 번호 마커
 - 수정 플라이휠 (`modify_node`) + 빠른 수정 버튼
 - 사이드바 노드 진행 상태 표시
@@ -266,7 +292,7 @@ class CourseState(TypedDict):
 - 인트로 애니메이션 + BGM
 - 날씨 실내 전환, 일출·일몰 안내, 리뷰 조건별 요약
 - 캐시·폴백·타임아웃 적용, 시연 시나리오 3개 사전 실행
-- Dockerfile + Streamlit Cloud 배포
+- 백엔드 Cloud Run 배포 + 프론트 Firebase Hosting 배포
 - 산출물: 배포 URL, 시연 영상
 
 ### Phase 5 — 발표 준비 (3~4일)
@@ -281,7 +307,8 @@ class CourseState(TypedDict):
 |---|---|---|
 | 데이터/RAG | TourAPI·블로그 수집, 라벨링, 벡터DB | `data/`, `rag_search` |
 | 에이전트 | LangGraph 그래프, Tools, 프롬프트 | `agent/`, `tools/` |
-| 프론트/지도 | Streamlit, folium, 인트로 애니메이션 | `app/` |
+| 프론트/지도 | React, Kakao Map JS, 인트로 애니메이션, Firebase 배포 | `frontend/` |
+| 백엔드 API | FastAPI 엔드포인트, SSE, Cloud Run 배포 | `odiro/api/`, `Dockerfile` |
 | PM/발표 | 페르소나·인터뷰, 슬라이드, 시연 시나리오, 배포 | 발표자료, Dockerfile |
 
 ---
@@ -294,7 +321,8 @@ class CourseState(TypedDict):
 | LLM이 없는 장소 생성 | verify 노드 필수 통과, 미검증 장소는 절대 지도에 안 올림 |
 | 블로그 수집 품질 저하(광고) | 라벨링 단계에서 "광고성" 플래그 → 제외 |
 | 인트로 애니메이션에 시간 잠식 | Phase 4로 고정, 핵심 루프 완성 전 착수 금지 |
-| Streamlit 리런으로 지도 깜빡임 | `session_state`에 지도 객체 캐시, `key` 고정 |
+| Cloud Run 콜드스타트로 첫 응답 지연 | 시연 전 최소 인스턴스 1 설정 또는 로컬 백엔드로 시연 |
+| 프론트·백엔드 분리로 통합 지연 | Phase 2 끝에 API 스키마(JSON) 먼저 고정, 프론트는 목 데이터로 병행 개발 |
 
 ---
 

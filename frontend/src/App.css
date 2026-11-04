@@ -1,0 +1,33 @@
+.intro {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: radial-gradient(circle at 30% 20%, #1e2a4a, #0b1020 70%);
+  color: #f3f4f6;
+  text-align: center;
+  padding: 2rem;
+}
+
+.logo {
+  font-size: 4rem;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+.tagline {
+  font-size: 1.2rem;
+  opacity: 0.85;
+  margin: 0;
+}
+
+.status {
+  margin-top: 2rem;
+  font-size: 0.95rem;
+}
+
+.good { color: #4ade80; }
+.warn { color: #fbbf24; }
+.bad { color: #f87171; }

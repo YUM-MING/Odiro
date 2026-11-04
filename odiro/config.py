@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     openweather_api_key: str = ""
     kma_api_key: str = ""
 
+    # API 서버
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
     # 경로
     cache_dir: Path = PROJECT_ROOT / "cache"
     vectorstore_dir: Path = PROJECT_ROOT / "data" / "vectorstore"
