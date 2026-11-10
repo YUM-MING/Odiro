@@ -65,7 +65,9 @@
 - [x] 문서: 목표 **전국**, 1주차 수도권 → 나머지 14개 시도는 다음 주차가 `--all` 로. 브랜치 없이 `main` 직접 작업으로 규칙 변경. TourAPI 개발계정 절차(운영계정은 호출 이력 없으면 반려됨)
 
 ### 3. 못 한 것 / 미뤄진 것
-- [ ] **배포 활성화** — 사람이 콘솔에서 해야 하는 4가지 (README "배포" 1~4): ① Cloud Shell 에서 `bash scripts/setup_ci.sh` ② 벡터 DB tgz 를 GCS 에 올리고 GitHub Variable `VECTORSTORE_GCS_URI` ③ Cloud Run 환경변수에 키 10개 ④ Kakao 콘솔에 `https://odiro-where.web.app` 도메인 등록. 이 넷이 끝나야 사이트에서 코스 생성이 된다. 그 전까지 https://odiro-where.web.app 은 0주차 랜딩 그대로.
+- [x] ~~배포 활성화~~ — 자동 배포는 **이미 켜져 있었다** (0주차가 `setup_ci.sh` 는 실행했고 워크플로 파일만 안 올렸던 것). 11/11 부터 `main` push 마다 Cloud Run + Hosting 배포가 돈다 (https://github.com/YUM-MING/Odiro/actions). 벡터 DB 는 `gs://odiro-where-data/vectorstore.tgz` + Variable `VECTORSTORE_GCS_URI` 로 이미지에 포함.
+- [ ] **Cloud Run 환경변수(API 키)** — `python scripts/push_env_to_cloudrun.py` 1회 (gcloud 로그인 필요). 이게 비어 있으면 사이트의 `/api/config-check` 가 `ready:false` 이고 코스 생성이 503. 키를 바꾸면 다시 실행.
+- [ ] **Kakao 콘솔 Web 도메인 등록** — `http://localhost:5173`, `https://odiro-where.web.app`. 안 하면 지도 SDK 가 "domain mismatched" 로 거부돼 지도 패널만 비어 보인다 (코스 생성 자체는 됨).
 - [ ] **TourAPI 상세(overview)** — 개발계정 기능별 일 1,000건이라 서울 999건만. 매일 `python -m odiro.data.ingest.tour_api --no-meta` 한 번씩 (인천·경기 관광지/문화시설 우선). **운영계정 전환 신청**은 호출 이력이 생겼으니 지금 넣을 것 (data.go.kr → 해당 API → 변경 신청, 활용 URL 에 https://odiro-where.web.app)
 - [ ] **나머지 14개 시도** (D6~D8) — `tour_api --all`, `naver_blog --all`, `labeling --all`, `build_index --all` 순서. 블로그 라벨링 비용은 1만 건당 약 1달러
 - [ ] **품질** — 아직 손볼 곳: (a) 자차 모드 반경 30km 라 "송도" 요청에 계양구 장소가 섞임 → 동 단위 요청이면 반경 10km 로 줄이기 (b) 리뷰 요약이 '정보 부족' 으로 비는 비율 30~50% (c) 체류 시간이 LLM 기본값 60분으로 몰림 (d) 여행 모드 숙소 배치가 불안정 (e) 응답 시간 30~45초 → draft/compose 를 더 빠른 모델로 분리하거나 compose 를 스트리밍

@@ -68,11 +68,10 @@ python -m odiro.tools.rag_search "성수동 조용한 카페 데이트"   # 검�
 
 **자동 배포 (권장)** — `main` 에 push 하면 GitHub Actions(`.github/workflows/deploy.yml`)가 백엔드·프론트를 배포한다. 켜려면 1회:
 
-1. Cloud Shell(https://shell.cloud.google.com) 에서 `gh auth login` 후 `bash scripts/setup_ci.sh` → 서비스 계정 키가 GitHub Secret `GCP_SA_KEY` 로, Variable `CI_ENABLED=true` 가 등록된다.
-2. 벡터 DB 업로드: 로컬에서 `tar czf vectorstore.tgz -C data vectorstore` 로 묶어 GCS 버킷에 올리고(콘솔 업로드 OK, 예: `gs://odiro-where-data/vectorstore.tgz`),
-   GitHub 레포 Settings → Variables 에 `VECTORSTORE_GCS_URI` 로 그 경로를 넣는다. 없으면 벡터 DB 없이 배포되어 RAG 가 비어 있다.
-3. Cloud Run 콘솔 → `odiro-api` → 수정 및 새 버전 배포 → 변수 및 보안 비밀에 `.env` 의 키 10개를 넣는다 (이름 동일, TourAPI 는 Decoding 키).
-4. Kakao 디벨로퍼스 → 앱 → 플랫폼 Web 에 `https://odiro-where.web.app` 등록, 카카오맵 활성화 ON (JS 키 도메인 제한).
+1. ✅ (완료, 11/04) `bash scripts/setup_ci.sh` → GitHub Secret `GCP_SA_KEY`, Variable `CI_ENABLED=true`. 새 GCP 프로젝트로 옮길 때만 다시 실행.
+2. ✅ (완료, 11/11) 벡터 DB: `tar czf vectorstore.tgz -C data vectorstore` → `gs://odiro-where-data/vectorstore.tgz`, Variable `VECTORSTORE_GCS_URI`. **인덱스를 다시 만들면 tgz 를 다시 올려야** 배포에 반영된다 (서버 꺼진 상태에서 tar 할 것).
+3. API 키: `python scripts/push_env_to_cloudrun.py` (gcloud 로그인 필요). `.env` 의 키를 Cloud Run 환경변수로 올린다. 키 바꿀 때마다 재실행.
+4. Kakao 디벨로퍼스 → 앱 → 플랫폼 Web 에 `https://odiro-where.web.app`, `http://localhost:5173` 등록, 카카오맵 활성화 ON (JS 키 도메인 제한).
 
 **수동 배포** (gcloud / firebase CLI 로그인 필요)
 
