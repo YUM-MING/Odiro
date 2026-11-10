@@ -53,7 +53,7 @@
 - [x] **데이터 (수도권: 서울 11·인천 28·경기 41)** — 커밋 `eab1cca`, `6cd88f6`
   - TourAPI 장소 메타 19,424건 (`lDongRegnCd` 법정동 코드 기준. 구 `areaCode` 는 1/8 만 나옴), 서울 상세(overview) 999건
   - 네이버 블로그 67,172건 (시군구 × 테마 11 × 100위까지), 타지역 글 필터(`off_region`), 광고 1차 플래그
-  - gpt-4o-mini 라벨링(태그 11종 + 광고 판정) → Chroma 인덱스. 11/11 기준 2.3만 청크 적재, 추가 수집분 4.4만 건 라벨링 진행 중 (아래 3번)
+  - gpt-4o-mini 라벨링 65,199건(태그 11종 + 광고 판정) → Chroma 인덱스 **63,347청크 / 675MB** (서울 19,117 · 인천 8,229 · 경기 36,001). `gs://odiro-where-data/vectorstore.tgz` 에 업로드
   - `odiro/data/ingest/*` 6개 모듈, 전부 재실행 안전·지역 인자(`--area`, `--all`)
 - [x] **Tool 6개** (`odiro/tools/`): `rag_search`(태그·지역 필터), `search_place`(카카오 실존 검증·지오코딩), `get_route`(Mobility/Tmap + 직선거리 폴백), `get_sun_times`, `get_weather`, `summarize_reviews`(Tavily + LLM). 전부 diskcache + 8초 타임아웃 — 커밋 `c50419d`
 - [x] **LangGraph** (`odiro/agent/`): 7 노드 + 수정 플라이휠(`modify`). 초안에 예비 후보를 같이 받아 검증 실패 자리를 메우고, 이름 유사도 + 카테고리 일치로 **할루시네이션 장소 0건** 보장. CLI `python -m odiro.agent.run "성수동" --edit "..."`
@@ -67,7 +67,6 @@
 ### 3. 못 한 것 / 미뤄진 것
 - [ ] **배포 활성화** — 사람이 콘솔에서 해야 하는 4가지 (README "배포" 1~4): ① Cloud Shell 에서 `bash scripts/setup_ci.sh` ② 벡터 DB tgz 를 GCS 에 올리고 GitHub Variable `VECTORSTORE_GCS_URI` ③ Cloud Run 환경변수에 키 10개 ④ Kakao 콘솔에 `https://odiro-where.web.app` 도메인 등록. 이 넷이 끝나야 사이트에서 코스 생성이 된다. 그 전까지 https://odiro-where.web.app 은 0주차 랜딩 그대로.
 - [ ] **TourAPI 상세(overview)** — 개발계정 기능별 일 1,000건이라 서울 999건만. 매일 `python -m odiro.data.ingest.tour_api --no-meta` 한 번씩 (인천·경기 관광지/문화시설 우선). **운영계정 전환 신청**은 호출 이력이 생겼으니 지금 넣을 것 (data.go.kr → 해당 API → 변경 신청, 활용 URL 에 https://odiro-where.web.app)
-- [ ] **추가 블로그 4.4만 건 라벨링·인덱싱** — 백그라운드로 돌리는 중. 끝나면 `python -m odiro.data.ingest.build_index` 로 적재 → 인덱스 약 6.5만 청크 예상. 끝났는지는 `wc -l data/raw/labeled/*.jsonl` 이 `data/raw/blog/*.jsonl` 과 비슷해졌는지로 확인
 - [ ] **나머지 14개 시도** (D6~D8) — `tour_api --all`, `naver_blog --all`, `labeling --all`, `build_index --all` 순서. 블로그 라벨링 비용은 1만 건당 약 1달러
 - [ ] **품질** — 아직 손볼 곳: (a) 자차 모드 반경 30km 라 "송도" 요청에 계양구 장소가 섞임 → 동 단위 요청이면 반경 10km 로 줄이기 (b) 리뷰 요약이 '정보 부족' 으로 비는 비율 30~50% (c) 체류 시간이 LLM 기본값 60분으로 몰림 (d) 여행 모드 숙소 배치가 불안정 (e) 응답 시간 30~45초 → draft/compose 를 더 빠른 모델로 분리하거나 compose 를 스트리밍
 - [ ] **프론트 실브라우저 검증** — 코드 리뷰·빌드만 했고 실제 브라우저에서 카카오맵 핀·SSE 를 끝까지 눌러보는 건 다음 담당자가 로컬에서 꼭 한 번 (`npm run dev` + 백엔드)
@@ -98,7 +97,7 @@
 | 서비스 | https://odiro-where.web.app (배포 활성화 전까지 0주차 랜딩) |
 | 백엔드 직접 URL | https://odiro-api-80160454962.asia-northeast3.run.app |
 | GitHub | https://github.com/YUM-MING/Odiro (`main` 직접 작업) |
-| 데이터 tgz | **Drive 링크: (업로드 후 기입)** — `data/raw` 24MB + `data/vectorstore` 250MB |
+| 데이터 tgz | 벡터 DB: `gs://odiro-where-data/vectorstore.tgz` (GCP 콘솔 Storage 에서 다운로드, 약 600MB) · 원본+상태: `odiro-data-20261111.tgz` → **Drive 링크: (업로드 후 기입)**. 로컬 복원: `tar xzf vectorstore.tgz -C data/` |
 | API 키 | 메신저 비공개 노트 (`.env` 완성본) |
 | 시연 캐시 | `cache/demo/*.json` (`scripts/warm_demo_cache.py --date <시연일>` 로 생성) |
 | 그래프 다이어그램 | `python -m odiro.agent.graph` |
