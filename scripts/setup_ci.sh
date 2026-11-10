@@ -3,6 +3,9 @@
 # 하는 일: 배포용 서비스 계정 생성 → 권한 부여 → 키 발급 → GitHub secret/variable 등록 → 키 파일 삭제
 set -euo pipefail
 
+# Windows Git Bash 에서 PATH 에 없을 때를 위해 기본 설치 위치를 추가
+export PATH="$PATH:/c/Program Files/GitHub CLI:$HOME/google-cloud-sdk/bin"
+
 PROJECT=odiro-where
 SA_NAME=github-deploy
 SA="$SA_NAME@$PROJECT.iam.gserviceaccount.com"
