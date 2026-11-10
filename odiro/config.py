@@ -41,7 +41,13 @@ class Settings(BaseSettings):
     kma_api_key: str = ""
 
     # API 서버
-    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    # 프론트가 Cloud Run 을 직접 호출(SSE 는 Hosting rewrite 를 거치면 버퍼링됨)하므로 배포 도메인을 허용한다
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://odiro-where.web.app",
+        "https://odiro-where.firebaseapp.com",
+    ]
 
     # 경로
     cache_dir: Path = PROJECT_ROOT / "cache"

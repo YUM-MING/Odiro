@@ -69,7 +69,11 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
+      # SSE(진행 상태 스트리밍)는 Hosting rewrite 를 거치면 버퍼링되므로 프론트가 Cloud Run 을 직접 호출한다.
+      # 백엔드 URL 이 바뀌면 GitHub Variable API_URL 로 덮어쓴다.
       - run: npm run build
+        env:
+          VITE_API_URL: ${{ vars.API_URL || 'https://odiro-api-80160454962.asia-northeast3.run.app' }}
 
       - uses: google-github-actions/auth@v2
         with:

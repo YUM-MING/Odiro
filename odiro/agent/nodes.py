@@ -33,6 +33,8 @@ MAX_PLACES_PER_DAY_TRIP = 5
 MIN_PLACES_PER_DAY = 3
 SPARES_PER_DAY = 3
 VERIFY_RADIUS = {"walk": 2500, "car": 30000}
+# 카카오 카테고리 대분류 중 코스 장소가 될 수 없는 것 (이름이 완전히 같으면 예외)
+NON_VENUE_TOP_CATEGORIES = {"부동산", "의료,건강", "금융,보험", "행정,사회기관", "교육,학문", "서비스,산업", "가정,생활", "교통,수송"}
 
 
 # ---------- LLM 출력 스키마 ----------
@@ -111,7 +113,7 @@ def _places_per_day(req: dict[str, Any]) -> int:
     return max(MIN_PLACES_PER_DAY, min(cap, n))
 
 
-def _fmt_rag_docs(docs: list[dict[str, Any]], limit: int = 12) -> str:
+def _fmt_rag_docs(docs: list[dict[str, Any]], limit: int = 20) -> str:
     lines = []
     for d in docs[:limit]:
         if d.get("doc_type") == "place":
@@ -159,9 +161,18 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
 
     def do_rag() -> list[dict[str, Any]]:
         try:
-            places = rag.search(base_q, moods=moods, region=req["region"], k=10, doc_type="place")
-            blogs = rag.search(base_q, moods=moods, region=req["region"], k=8, doc_type="blog")
-            return places + blogs
+            places = rag.search(base_q, moods=moods, region=req["region"], k=8, doc_type="place")
+            # 식당·카페 후보가 빠지지 않도록 따로 뽑는다 (TourAPI 장소 문서는 관광지 비중이 커서)
+            eats = rag.search(f"{req['region']} 맛집 식당 {' '.join(moods)}", moods=None, region=req["region"], k=5, doc_type="blog")
+            cafes = rag.search(f"{req['region']} 카페 {' '.join(moods)}", moods=None, region=req["region"], k=4, doc_type="blog")
+            blogs = rag.search(base_q, moods=moods, region=req["region"], k=6, doc_type="blog")
+            seen: set[str] = set()
+            out: list[dict[str, Any]] = []
+            for d in places + eats + cafes + blogs:
+                if d["doc_id"] not in seen:
+                    seen.add(d["doc_id"])
+                    out.append(d)
+            return out
         except Exception as e:  # noqa: BLE001
             log.warning("rag 실패: %s", e)
             return []
@@ -207,7 +218,9 @@ DRAFT_SYSTEM = """당신은 Odiro, 국내 여행·데이트 코스 플래너입�
    장소명은 지도 앱에 등록된 공식 명칭으로 (예: "가평레일파크", "쁘띠프랑스", "어니언 성수").
 2. 제공된 큐레이션 문서 중 **[장소 ✔지도확인]** 표시가 있는 것은 실존이 확인된 장소이니 조건에 맞으면 우선 사용하고 source="rag" 로 표기합니다.
    블로그 글에 나온 상호를 쓰면 source="rag", 웹검색은 "web", 일반 지식은 "llm".
-3. 나들이 모드 기본 뼈대는 "밥 1 + 카페 1 + 놀거리/산책 1 (+α)". 여행 모드는 Day 별로, 마지막 Day 를 제외하고 숙소를 마지막에 둡니다.
+3. **Day 마다 반드시 식당 1곳 이상 + 카페 1곳 이상** 을 넣고 나머지를 관광지·놀거리·산책으로 채웁니다 (나들이 뼈대 "밥 1 + 카페 1 + 놀거리 1 + α").
+   식사 시간대(11:30~13:30, 17:30~19:30)에 식당이 오도록 순서를 잡습니다. category 는 실제 업종대로 (카페거리·상업시설은 '놀거리', 복합문화공간은 '관광지').
+   여행 모드는 Day 별로, 마지막 Day 를 제외하고 숙소를 마지막에 둡니다.
 4. 뚜벅이는 장소 간 도보 15분 안쪽(약 1km)으로 촘촘하게, 자차는 반경을 넓혀도 됩니다.
 5. 비 예보면 실내(전시·대형 카페·박물관·쇼핑) 위주로, 일몰 태그가 있으면 일몰 시각 즈음 뷰 좋은 곳을 배치합니다.
 6. 예산을 넘기지 않게 (1인 식사 1.5~3만, 카페 1만, 입장료 0~2만 기준). 체류 시간은 식당 60~90, 카페 60, 관광지 60~120 분.
@@ -279,18 +292,29 @@ def _verify_one(c: dict[str, Any], center: dict[str, Any] | None, radius: int, h
     if c.get("verified") and c.get("lat") and c.get("lng"):
         return c  # 수정 흐름에서 이미 검증된 장소
     hit = None
+    names = [c["name"]]
+    tokens = c["name"].split()
+    if len(tokens) >= 3:  # '성수동 애견동반카페 따우전드 성수' → '따우전드 성수' 처럼 수식어를 떼고 한 번 더
+        names.append(" ".join(tokens[-2:]))
     try:
-        if center:
-            hit = search_place.verify(c["name"], center["lat"], center["lng"], radius, hint)
-        else:
-            res = search_place.search(f"{hint} {c['name']}", size=3)
-            hit = res[0] if res else None
+        for nm in names:
+            if center:
+                hit = search_place.verify(nm, center["lat"], center["lng"], radius, hint)
+            else:
+                res = search_place.search(f"{hint} {nm}", size=3)
+                hit = res[0] if res else None
+            if hit:
+                break
     except Exception as e:  # noqa: BLE001
         log.warning("verify 오류 %s: %s", c["name"], e)
     if not hit:
         return {**c, "verified": False}
     cat = c.get("category") or ""
     group = hit.get("category_group", "")
+    # 코스에 올릴 수 없는 업종 (주거·의료·행정 등). 카카오 카테고리 대분류로 거른다.
+    top = (hit.get("category_full") or "").split(" > ")[0]
+    if top in NON_VENUE_TOP_CATEGORIES and search_place._norm_name(c["name"]) != search_place._norm_name(hit["name"]):
+        return {**c, "verified": False}
     # 역할 불일치 방지: '청평호(관광지)' 가 '청평호반닭갈비(식당)' 로 매칭되는 류. 이름이 완전히 같을 때만 예외.
     exact = search_place._norm_name(c["name"]) == search_place._norm_name(hit["name"])
     if not exact:
@@ -569,6 +593,7 @@ MODIFY_SYSTEM = DRAFT_SYSTEM + """
 지금은 **기존 코스의 한 장소만 교체**하는 단계입니다. 사용자의 수정 요청을 읽고 어느 장소(인덱스)를 무엇으로 바꿀지 정하세요.
 - 요청이 특정 장소를 가리키면 그 인덱스, "N번째" 는 N-1.
 - 교체 장소는 같은 지역·같은 역할에서 요청한 성격(더 조용한, 실내, 저렴한 등)을 만족하는 **실존 장소**. 기존 코스의 다른 장소와 가까울수록 좋습니다.
+- name 은 지도에 등록된 상호 그대로만 ("성수동 애견동반카페 따우전드" ✗ → "따우전드 성수" ✓). 수식어·지역명을 붙이지 않습니다.
 - 코스 전체를 다시 짜달라는 요청이면 target_index=-1, place=null."""
 
 

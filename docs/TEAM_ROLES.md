@@ -27,31 +27,34 @@
 
 산출물: `odiro/data/ingest/*.py` 4개, `odiro/tools/rag_search.py`, 수도권 `data/` tgz 링크, `.env` 완성본(비공개 공유)
 
-## 2주차 — 에이전트 코어 + 나머지 시도 데이터 (팀원 A)
+> **11/11 역할 재조정**: 1주차가 Phase 1 에 더해 Phase 2(Tool 6개·LangGraph·CLI)·Phase 3(API·프론트 플래너) 1차 구현까지 끝냈다
+> (HANDOVER.md 1주차 섹션). 아래 2·3주차 계획은 "만들기" 에서 "전국 확장·품질·안정화·시연" 으로 바꿨다. 원래 계획은 git 이력(`6cd88f6`) 참고.
 
-**데이터 분배**: 1주차가 수도권(서울·인천·경기)을 끝내고 넘긴다. 나머지 14개 시도(D6~D8)는 양이 커서 2주차 첫날에 1주차가 만든 스크립트를 **`--all` 옵션(수도권 제외)으로 백그라운드 실행**해 두고 에이전트 작업을 한다.
+## 2주차 — 전국 데이터 확장 + 에이전트 품질 (팀원 A)
 
-- [ ] Day 1: 인수인계 문서 읽고 로컬 세팅, `check_apis.py` 전부 OK 확인. `tour_api.py --all` / `naver_blog.py --all` 백그라운드 실행 (D6·D7, 하루 한도 안에서 며칠 걸림. 운영계정 승인되면 한도만 올라가고 키는 그대로)
-- [ ] Day 2: Tools 구현 — `search_place`(Kakao Local), `get_route`(Mobility/Tmap + 직선거리 폴백), `get_sun_times`(astral), `get_weather`(OpenWeather)
-- [ ] Day 3: `summarize_reviews`(Tavily + LLM), Tool 단위 테스트 `tests/test_tools.py`
-- [ ] Day 4: LangGraph 노드 — `parse_intent → retrieve(RAG ∥ 웹) → draft_course(Structured Output)`
-- [ ] Day 5: `verify_places`(실존 검증 루프 최대 2회) → `optimize_route`(≤6개 순열) → `enrich` → `compose_answer`
-- [ ] Day 6: `modify_node` 수정 플라이휠. CLI `python -m odiro.agent.graph "성수동 뚜벅이 데이트"` 로 JSON 코스 출력. **할루시네이션 장소 0건** 확인
-- [ ] Day 7: 나머지 시도 수집분 라벨링·인덱스 확장(D8, 예산 보고 샘플링). API 응답 JSON 스키마를 `docs/API_SCHEMA.md` 로 고정 (3주차 프론트용). 인수인계 문서 작성
+**데이터 분배**: 수도권(서울·인천·경기)은 끝났다. 나머지 14개 시도(D6~D8)를 `--all` 로 백그라운드 수집하면서 에이전트 품질을 올린다.
 
-산출물: `odiro/tools/*.py` 6개, `odiro/agent/nodes.py`, `tests/test_tools.py`, `docs/API_SCHEMA.md`, 전국 데이터 tgz (수도권 + 나머지 시도)
+- [ ] Day 1: 인수인계 문서 읽고 로컬 세팅 (`pytest`, `check_apis.py`, `python -m odiro.agent.run "성수동"`, 프론트 `/plan`). **배포 활성화 4가지**(README 배포 1~4) 해서 사이트에서 코스가 나오게. `tour_api --all` / `naver_blog --all` 백그라운드 시작, 운영계정 전환 신청
+- [ ] Day 2: 자차 반경·동 단위 요청 처리 (`VERIFY_RADIUS`, 지오코딩) + 체류 시간·식사 시간대 규칙 → `nodes.DRAFT_SYSTEM` 프롬프트 개선. 결과를 시나리오 3개로 전후 비교
+- [ ] Day 3: 리뷰 요약 공란 비율 줄이기 (`summarize_reviews` 쿼리·발췌 수), 여행 모드 숙소 배치 규칙, `tests/test_tools.py` 보강
+- [ ] Day 4: 응답 시간 30~45초 → 25초 목표: draft/compose 모델 분리(`LLM_MODEL_DRAFT`), compose 스트리밍 또는 템플릿 우선 표시. 노드별 ms 는 `meta.trace` 로 측정
+- [ ] Day 5: 나머지 시도 라벨링·인덱싱(`labeling --all`, `build_index --all`, 예산 보고 샘플링) + `rag_search.OTHER_REGION_WORDS`·`_SIDO_ALIASES` 전국 보강
+- [ ] Day 6: 할루시네이션 0건 검증 스크립트 (시나리오 10개 돌려 `verified` 아닌 장소가 응답에 없는지, 반경 밖 장소 비율) → `tests/` 또는 `scripts/eval_courses.py`
+- [ ] Day 7: 전국 데이터 tgz 업로드, 인수인계 문서 작성
 
-## 3주차 — UI 연결 + 안정화 + 시연 (팀원 B)
+산출물: 전국 인덱스, 프롬프트·검증 개선 커밋, 평가 스크립트, `.env`/tgz 공유
 
-- [ ] Day 1: FastAPI `POST /api/course`, `POST /api/course/edit`, `GET /api/course/stream`(SSE 노드 진행상태)
-- [ ] Day 2: 프론트 조건 빌더 (랜딩의 검색 카드 → 모드·이동수단·지역·날짜·예산·분위기 태그·자유 텍스트)
-- [ ] Day 3: 채팅 + Kakao Map JS 스플릿 뷰 — 번호 핀, 동선 폴리라인, 핀 클릭 팝업
-- [ ] Day 4: 빠른 수정 버튼(플라이휠), 사이드바 노드 진행 표시, 공유(텍스트 복사·카카오맵 링크)
-- [ ] Day 5: 안정화 — 타임아웃·폴백·diskcache, 시연 시나리오 3개 사전 실행 캐시 (D9). 날씨 실내 전환
-- [ ] Day 6: 인트로 애니메이션 + BGM (핵심 루프 완성 후에만). 벡터 DB 배포 방식 결정 (이미지 포함 vs GCS)
-- [ ] Day 7: 배포 최종본, **시연 영상 녹화**, 인수인계(발표 준비용) 문서
+## 3주차 — UI 다듬기 + 안정화 + 시연 (팀원 B)
 
-산출물: 배포 URL 에서 전 과정 동작, 시연 영상, `cache/demo/`
+- [ ] Day 1: 실브라우저에서 전 흐름 점검 (조건 빌더 → SSE 진행 → 지도 핀·동선·팝업 → 바꾸기 → 공유). 모바일 레이아웃. 버그 목록 → 수정
+- [ ] Day 2: 핀 클릭 팝업 내용(영업시간·전화·이미지), 장소 카드 ↔ 지도 연동, 빠른 수정 버튼 문구 다듬기, 에러·타임아웃 UX
+- [ ] Day 3: 안정화 — 사이트에서 20회 연속 생성해 실패율 측정, Cloud Run 메모리/타임아웃 조정, 콜드스타트 체감 개선(로딩 메시지)
+- [ ] Day 4: 시연 시나리오 3개 사전 캐시 (`scripts/warm_demo_cache.py --date <시연일>`), 네트워크 끊고 리허설 (로컬 백엔드 + 캐시)
+- [ ] Day 5: 인트로 애니메이션 + BGM (핵심 루프가 안정적일 때만). 그래프 다이어그램 PNG (`python -m odiro.agent.graph` → mermaid.live)
+- [ ] Day 6: **시연 영상 녹화**, 스크린샷 백업, 발표 슬라이드용 로그 패널 캡처("RAG 16건 / 웹 7건 참조")
+- [ ] Day 7: 배포 최종본 태그, 코드 동결, 인수인계(발표 준비용) 문서
+
+산출물: 배포 URL 에서 전 과정 동작, 시연 영상, `cache/demo/`, 실패율 리포트
 
 ## 공통 규칙
 

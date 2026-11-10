@@ -41,6 +41,76 @@
 
 ---
 
+## 1주차 → 2주차 인수인계 (담당: YUM-MING, 기간: 11/04 ~ 11/11)
+
+### 1. 한 줄 요약
+**수도권 데이터(장소 1.9만 + 블로그 6.7만) → RAG → LangGraph 에이전트 → FastAPI(SSE) → React 플래너(지도)까지 전 과정이 로컬에서 돌아간다.**
+"성수동 조용한 데이트" 를 넣으면 30~45초 뒤 카카오맵에 실존 확인된 장소 4~5곳과 동선이 찍히고, "3번째를 실내로 바꿔줘" 가 12초 안에 반영된다.
+원래 1주차 범위(Phase 1)를 넘어 Phase 2(에이전트)·3(UI) 1차 구현까지 끝냈으므로 **2·3주차 역할을 아래 4번처럼 조정**했다.
+
+### 2. 완료한 것
+- [x] **API 키 10개 전부 발급·검증** (`python scripts/check_apis.py` 전부 OK). 네이버 검색 API 는 2026-07-31 이관으로 **NCP NAVER API HUB** 에서 발급(엔드포인트·헤더 다름, 코드 반영됨)
+- [x] **데이터 (수도권: 서울 11·인천 28·경기 41)** — 커밋 `eab1cca`, `6cd88f6`
+  - TourAPI 장소 메타 19,424건 (`lDongRegnCd` 법정동 코드 기준. 구 `areaCode` 는 1/8 만 나옴), 서울 상세(overview) 999건
+  - 네이버 블로그 67,172건 (시군구 × 테마 11 × 100위까지), 타지역 글 필터(`off_region`), 광고 1차 플래그
+  - gpt-4o-mini 라벨링(태그 11종 + 광고 판정) → Chroma 인덱스. 11/11 기준 2.3만 청크 적재, 추가 수집분 4.4만 건 라벨링 진행 중 (아래 3번)
+  - `odiro/data/ingest/*` 6개 모듈, 전부 재실행 안전·지역 인자(`--area`, `--all`)
+- [x] **Tool 6개** (`odiro/tools/`): `rag_search`(태그·지역 필터), `search_place`(카카오 실존 검증·지오코딩), `get_route`(Mobility/Tmap + 직선거리 폴백), `get_sun_times`, `get_weather`, `summarize_reviews`(Tavily + LLM). 전부 diskcache + 8초 타임아웃 — 커밋 `c50419d`
+- [x] **LangGraph** (`odiro/agent/`): 7 노드 + 수정 플라이휠(`modify`). 초안에 예비 후보를 같이 받아 검증 실패 자리를 메우고, 이름 유사도 + 카테고리 일치로 **할루시네이션 장소 0건** 보장. CLI `python -m odiro.agent.run "성수동" --edit "..."`
+- [x] **FastAPI**: `POST /api/course`, `/course/start` + `GET /course/stream/{job}`(SSE 진행상태), `/course/edit(/start)`, `/moods`. 계약 문서 `docs/API_SCHEMA.md`
+- [x] **프론트**: 랜딩 검색 카드 → 조건 빌더 → `/plan` (SSE 진행 사이드바, 채팅 마크다운, 카카오맵 번호 핀·동선·팝업, 장소별 바꾸기·빠른 수정·자유 수정, 공유, 목업 모드 `VITE_MOCK=1`). 로그인/회원가입은 **넣지 않기로 결정**해 제거
+- [x] 시연 시나리오 3개 사전 캐시 스크립트 `scripts/warm_demo_cache.py` (성수동 데이트 / 가평 1박2일 자차 / 인천 송도 가족)
+- [x] 자동 배포 워크플로 `.github/workflows/deploy.yml` (0주차 문서엔 있다고 돼 있었지만 실제론 없었음) — 활성화는 3번
+- [x] 테스트 41개 (`pytest`, 네트워크 없음), ruff 통과, 프론트 lint·build 통과
+- [x] 문서: 목표 **전국**, 1주차 수도권 → 나머지 14개 시도는 다음 주차가 `--all` 로. 브랜치 없이 `main` 직접 작업으로 규칙 변경. TourAPI 개발계정 절차(운영계정은 호출 이력 없으면 반려됨)
+
+### 3. 못 한 것 / 미뤄진 것
+- [ ] **배포 활성화** — 사람이 콘솔에서 해야 하는 4가지 (README "배포" 1~4): ① Cloud Shell 에서 `bash scripts/setup_ci.sh` ② 벡터 DB tgz 를 GCS 에 올리고 GitHub Variable `VECTORSTORE_GCS_URI` ③ Cloud Run 환경변수에 키 10개 ④ Kakao 콘솔에 `https://odiro-where.web.app` 도메인 등록. 이 넷이 끝나야 사이트에서 코스 생성이 된다. 그 전까지 https://odiro-where.web.app 은 0주차 랜딩 그대로.
+- [ ] **TourAPI 상세(overview)** — 개발계정 기능별 일 1,000건이라 서울 999건만. 매일 `python -m odiro.data.ingest.tour_api --no-meta` 한 번씩 (인천·경기 관광지/문화시설 우선). **운영계정 전환 신청**은 호출 이력이 생겼으니 지금 넣을 것 (data.go.kr → 해당 API → 변경 신청, 활용 URL 에 https://odiro-where.web.app)
+- [ ] **추가 블로그 4.4만 건 라벨링·인덱싱** — 백그라운드로 돌리는 중. 끝나면 `python -m odiro.data.ingest.build_index` 로 적재 → 인덱스 약 6.5만 청크 예상. 끝났는지는 `wc -l data/raw/labeled/*.jsonl` 이 `data/raw/blog/*.jsonl` 과 비슷해졌는지로 확인
+- [ ] **나머지 14개 시도** (D6~D8) — `tour_api --all`, `naver_blog --all`, `labeling --all`, `build_index --all` 순서. 블로그 라벨링 비용은 1만 건당 약 1달러
+- [ ] **품질** — 아직 손볼 곳: (a) 자차 모드 반경 30km 라 "송도" 요청에 계양구 장소가 섞임 → 동 단위 요청이면 반경 10km 로 줄이기 (b) 리뷰 요약이 '정보 부족' 으로 비는 비율 30~50% (c) 체류 시간이 LLM 기본값 60분으로 몰림 (d) 여행 모드 숙소 배치가 불안정 (e) 응답 시간 30~45초 → draft/compose 를 더 빠른 모델로 분리하거나 compose 를 스트리밍
+- [ ] **프론트 실브라우저 검증** — 코드 리뷰·빌드만 했고 실제 브라우저에서 카카오맵 핀·SSE 를 끝까지 눌러보는 건 다음 담당자가 로컬에서 꼭 한 번 (`npm run dev` + 백엔드)
+- [ ] 발표용 그래프 이미지: `python -m odiro.agent.graph` 출력(Mermaid)을 https://mermaid.live 에서 PNG 로
+
+### 4. 다음 담당자가 첫날 해야 할 것 (순서대로)
+1. 이 문서 → `README.md` → `docs/API_SCHEMA.md` 읽기. `.env` 는 메신저 비공개 노트에서, 벡터 DB tgz 는 6번 Drive 링크에서 받아 `data/` 에 풀기
+2. 로컬 세팅 후 `pytest`, `python scripts/check_apis.py`, `python -m odiro.agent.run "성수동"` 이 되는지 확인. 프론트 `npm run dev` 로 `/plan` 까지 눌러보기
+3. **배포 활성화 4가지** (3번 첫 항목). 끝나면 push 한 번으로 사이트가 바뀐다
+4. `tour_api --no-meta` 하루 1회 돌리기 시작 + 운영계정 전환 신청
+5. 역할 재조정 (TEAM_ROLES.md 에 반영함): **2주차 = 전국 데이터 확장 + 에이전트 품질(위 3번 '품질' 항목) + 테스트**, **3주차 = UI 다듬기 + 안정화·시연 영상**
+
+### 5. 알아야 할 것 (함정·결정 사항)
+- **TourAPI 키는 Decoding 키.** Encoding 키(`%2B` 포함)를 넣으면 `SERVICE_KEY_IS_NOT_REGISTERED`. 코드가 `%` 들어간 키를 거부한다.
+- **네이버 검색 API 는 NCP** (`naverapihub.apigw.ntruss.com`, 헤더 `X-NCP-APIGW-API-KEY-ID/KEY`). developers.naver.com 키는 신규 발급 불가.
+- **Kakao Local 403 "disabled OPEN_MAP_AND_LOCAL"** 이면 카카오 디벨로퍼스 앱에서 "카카오맵" 활성화 ON.
+- **Tmap 403 INVALID_API_KEY** 면 openapi.sk.com 프로젝트에 TMAP API 상품이 안 붙은 것.
+- httpx 는 INFO 로그에 요청 URL 전체(서비스 키 포함)를 찍는다 → 로깅 설정에서 꺼 두었다. 새 스크립트 만들 때 주의.
+- 라벨링·임베딩·코스 생성 비용은 전부 `OPENAI_API_KEY` 계정에서 나간다. 1주차 총 약 4~6달러. 코스 1건 ≈ 10~20원.
+- `rag_search` 지역 해석은 시군구 이름 기준(캐시 `cache/ingest_state/sigungu_*.json`). "송도" 같은 동 이름은 시도까지만 잡히고, 좌표 중심은 카카오 주소 검색으로 따로 잡는다.
+- 프론트는 SSE 때문에 Cloud Run 을 **직접** 호출한다(`VITE_API_URL`). Hosting rewrite 는 응답을 버퍼링해 진행 표시가 안 된다. CORS 허용 도메인은 `odiro/config.py`.
+- 같은 요청은 7일 캐시(`cache/tools`) → 시연 리허설 때 결과가 안 바뀌면 `--no-cache` 또는 `cache/tools` 삭제.
+- 데이터 라벨에 **타지역 글**("연수구" 쿼리에 대전 글)이 섞여 들어오던 문제는 `off_region` 으로 걸러냈고 인덱스에서도 삭제했다. 전국 확장 때 `OTHER_REGION_WORDS` 를 해당 시도에 맞게 손볼 것.
+
+### 6. 자원 위치
+| 항목 | 위치 |
+|---|---|
+| 서비스 | https://odiro-where.web.app (배포 활성화 전까지 0주차 랜딩) |
+| 백엔드 직접 URL | https://odiro-api-80160454962.asia-northeast3.run.app |
+| GitHub | https://github.com/YUM-MING/Odiro (`main` 직접 작업) |
+| 데이터 tgz | **Drive 링크: (업로드 후 기입)** — `data/raw` 24MB + `data/vectorstore` 250MB |
+| API 키 | 메신저 비공개 노트 (`.env` 완성본) |
+| 시연 캐시 | `cache/demo/*.json` (`scripts/warm_demo_cache.py --date <시연일>` 로 생성) |
+| 그래프 다이어그램 | `python -m odiro.agent.graph` |
+
+### 7. 체크리스트
+- [x] `main` 에 push 됐고 빌드 통과 (`pytest` 41, ruff, `npm run lint`, `npm run build`)
+- [x] `.env`·데이터가 git 에 안 들어갔는지 확인
+- [ ] 데이터 tgz 업로드 + 링크 기입
+- [ ] 다음 담당자에게 메신저로 알림
+
+---
+
 ## 0주차 → 1주차 인수인계 (담당: Claude, 기간: 11/04)
 
 ### 1. 한 줄 요약
