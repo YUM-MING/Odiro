@@ -87,8 +87,9 @@ def search(
     size: int = 5,
 ) -> list[dict[str, Any]]:
     """키워드로 장소 검색. 중심좌표가 있으면 거리순(반경 ≤3km) 또는 정확도순."""
+    # 네임스페이스 v2: 응답 스키마(category_group 추가)가 바뀌면 숫자를 올려 옛 캐시를 무효화한다
     return cached(
-        "kakao_kw", CACHE_TTL, lambda: _kakao_keyword(query, lat, lng, radius_m, size), query, lat, lng, radius_m, size
+        "kakao_kw_v2", CACHE_TTL, lambda: _kakao_keyword(query, lat, lng, radius_m, size), query, lat, lng, radius_m, size
     )
 
 

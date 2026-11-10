@@ -61,6 +61,7 @@ class CourseState(TypedDict, total=False):
     # retrieve
     rag_docs: list[dict[str, Any]]
     web_docs: list[dict[str, Any]]
+    poi_docs: list[dict[str, Any]]  # 중심 주변 실존 식당·카페 (카카오)
     weather: dict[str, Any]
     sun_times: dict[str, str]
 

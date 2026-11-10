@@ -123,6 +123,12 @@ def _fmt_rag_docs(docs: list[dict[str, Any]], limit: int = 20) -> str:
     return "\n".join(lines) or "- (없음)"
 
 
+def _fmt_pois(pois: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        f"- {p['name']} ({p.get('category_full', '').split(' > ')[-1] or p.get('category')}, {p.get('address', '')})" for p in pois
+    ) or "- (없음)"
+
+
 def _fmt_web_docs(docs: list[dict[str, Any]], limit: int = 5) -> str:
     return "\n".join(f"- {d.get('title')}: {d.get('content', '')[:160]}" for d in docs[:limit]) or "- (없음)"
 
@@ -193,17 +199,34 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
         lat, lng = (center["lat"], center["lng"]) if center else (37.5665, 126.9780)
         return get_sun_times.sun_times(lat, lng, req["date"])
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        f_rag, f_web, f_wx, f_sun = ex.submit(do_rag), ex.submit(do_web), ex.submit(do_weather), ex.submit(do_sun)
-        rag_docs, web_docs, weather, sun = f_rag.result(), f_web.result(), f_wx.result(), f_sun.result()
+    def do_pois() -> list[dict[str, Any]]:
+        """중심 주변의 실존 식당·카페 (카카오). LLM 이 지어내지 않고 여기서 고르게 한다."""
+        if not center:
+            return []
+        radius = 1500 if req.get("transport") == "walk" else 8000
+        out: list[dict[str, Any]] = []
+        try:
+            # 분위기 단어를 섞으면 카카오 검색이 비어 버리므로 업종 키워드만 쓴다. 분위기 판단은 LLM 이 RAG 문서로 한다.
+            for q, group in (("맛집", "FD6"), ("카페", "CE7")):
+                hits = search_place.search(f"{req['region']} {q}", center["lat"], center["lng"], radius, size=15)
+                picked = [h for h in hits if h.get("category_group", group) == group]
+                out += picked[:8]
+        except Exception as e:  # noqa: BLE001
+            log.warning("poi 검색 실패: %s", e)
+        return out
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        f_rag, f_web, f_wx, f_sun, f_poi = ex.submit(do_rag), ex.submit(do_web), ex.submit(do_weather), ex.submit(do_sun), ex.submit(do_pois)
+        rag_docs, web_docs, weather, sun, pois = f_rag.result(), f_web.result(), f_wx.result(), f_sun.result(), f_poi.result()
 
     warnings = list(state.get("warnings", []))
     if weather.get("rain"):
         warnings.append(f"비 예보(강수확률 {int((weather.get('pop') or 0) * 100)}%) → 실내 위주로 구성했어요")
-    detail = f"RAG {len(rag_docs)}건 / 웹 {len(web_docs)}건 / 날씨 {weather.get('summary') or weather.get('note', '-')}"
+    detail = f"RAG {len(rag_docs)}건 / 웹 {len(web_docs)}건 / 주변 식당·카페 {len(pois)}곳 / 날씨 {weather.get('summary') or weather.get('note', '-')}"
     return {
         "rag_docs": rag_docs,
         "web_docs": web_docs,
+        "poi_docs": pois,
         "weather": weather,
         "sun_times": sun,
         "warnings": warnings,
@@ -216,8 +239,8 @@ DRAFT_SYSTEM = """당신은 Odiro, 국내 여행·데이트 코스 플래너입�
 원칙
 1. **실제로 존재하는 구체적인 장소명만** 씁니다. 모호한 표현("성수동 감성 카페")이나 지어낸 상호는 금지. 확신이 없으면 유명한 곳을 고릅니다.
    장소명은 지도 앱에 등록된 공식 명칭으로 (예: "가평레일파크", "쁘띠프랑스", "어니언 성수").
-2. 제공된 큐레이션 문서 중 **[장소 ✔지도확인]** 표시가 있는 것은 실존이 확인된 장소이니 조건에 맞으면 우선 사용하고 source="rag" 로 표기합니다.
-   블로그 글에 나온 상호를 쓰면 source="rag", 웹검색은 "web", 일반 지식은 "llm".
+2. **[장소 ✔지도확인]** 문서와 **"주변 실존 식당·카페"** 목록은 실존이 확인된 장소입니다. 식당·카페는 가능한 한 이 목록에서 고르고(조건에 맞는 것으로),
+   source="rag" 로 표기합니다. 블로그 글에 나온 상호를 쓰면 source="rag", 웹검색은 "web", 일반 지식은 "llm".
 3. **Day 마다 반드시 식당 1곳 이상 + 카페 1곳 이상** 을 넣고 나머지를 관광지·놀거리·산책으로 채웁니다 (나들이 뼈대 "밥 1 + 카페 1 + 놀거리 1 + α").
    식사 시간대(11:30~13:30, 17:30~19:30)에 식당이 오도록 순서를 잡습니다. category 는 실제 업종대로 (카페거리·상업시설은 '놀거리', 복합문화공간은 '관광지').
    여행 모드는 Day 별로, 마지막 Day 를 제외하고 숙소를 마지막에 둡니다.
@@ -249,6 +272,7 @@ def _draft_prompt(state: dict[str, Any], exclude: list[str] | None = None) -> st
         f"## 사용자 조건\n{state['conditions']}\n{radius_rule}",
         f"## 날씨 / 일출·일몰\n{wx_line} / 일출 {sun.get('sunrise', '?')} 일몰 {sun.get('sunset', '?')}",
         f"## 큐레이션 문서 (RAG)\n{_fmt_rag_docs(state.get('rag_docs', []))}",
+        f"## 주변 실존 식당·카페 (카카오 지도, ✔지도확인)\n{_fmt_pois(state.get('poi_docs', []))}",
         f"## 웹 검색\n{_fmt_web_docs(state.get('web_docs', []))}",
         f"## 요구 구조\nDay 수: {days}, Day 당 장소 {per_day}개 (정확히) + 예비 {SPARES_PER_DAY}개. 방문 순서대로.",
     ]
