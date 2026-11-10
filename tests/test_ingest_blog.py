@@ -4,6 +4,7 @@ from odiro.data.ingest.naver_blog import (
     THEMES,
     build_queries,
     is_ad_suspect,
+    is_off_region,
     merge_post,
     normalize_post,
     query_region_name,
@@ -54,3 +55,11 @@ def test_normalize_and_merge():
     merged = merge_post(p1, normalize_post(item, q2, "11"))
     assert merged["themes"] == ["데이트", "감성/조용한"]
     assert len(merged["queries"]) == 2
+
+
+def test_off_region():
+    assert is_off_region("대전시 실내 아이와 갈 만한 곳 총정리", "대전 유성구 ...", "28")
+    assert is_off_region("부산 연제만화도서관", "초4 아들과", "28")
+    assert not is_off_region("송도 실내 가볼만한곳 송도국제도서관", "비 오는 주말에", "28")
+    assert not is_off_region("서울 근교 양평 당일치기", "두물머리부터 북한강", "41")  # 수도권 교차 언급은 OK
+    assert not is_off_region("인천 여행 월미도", "부산 사람의 인천 방문기", "28")  # 자기 시도 언급 있으면 OK

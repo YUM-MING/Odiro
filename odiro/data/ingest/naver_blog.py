@@ -76,6 +76,25 @@ AD_PATTERNS = re.compile(
 )
 
 
+# 다른 시도를 가리키는 지역어. 검색 결과에 타지역 글(예: "연수구" 쿼리에 대전·부산 글)이 섞이는 것을 걸러낸다.
+# 수도권(서울·인천·경기)끼리는 "서울 근교 양평" 처럼 교차 언급이 자연스러워 서로 타지역으로 치지 않는다.
+OTHER_REGION_WORDS: dict[str, tuple[str, ...]] = {
+    "26": ("부산", "해운대", "광안리"), "27": ("대구",), "30": ("대전",), "31": ("울산",), "36110": ("세종",),
+    "51": ("강원", "강릉", "속초", "춘천", "양양", "평창"), "43": ("충북", "청주", "충주", "단양"),
+    "44": ("충남", "천안", "공주", "태안", "보령"), "52": ("전북", "전주", "군산"), "12": ("전남", "광주", "여수", "순천", "목포"),
+    "47": ("경북", "경주", "포항", "안동"), "48": ("경남", "창원", "통영", "거제", "김해"), "50": ("제주", "서귀포"),
+}
+CAPITAL_WORDS = ("서울", "인천", "경기")
+
+
+def is_off_region(title: str, description: str, sido_code: str) -> bool:
+    """글이 다른 시도 이야기로 보이면 True. 자기 시도(수도권) 지명이 함께 있으면 False."""
+    text = f"{title} {description}"
+    if any(w in text for w in CAPITAL_WORDS):
+        return False
+    return any(w in text for code, words in OTHER_REGION_WORDS.items() if code != sido_code for w in words)
+
+
 # ---------- 순수 함수 (테스트 가능) ----------
 
 
@@ -124,6 +143,7 @@ def normalize_post(item: dict[str, Any], q: dict[str, str], sido_code: str) -> d
         "themes": [q["theme"]],
         "queries": [q["query"]],
         "ad_suspect": is_ad_suspect(title, desc),
+        "off_region": is_off_region(title, desc, sido_code),
         "source": "naver_blog",
     }
 
@@ -189,14 +209,17 @@ def collect_blogs(
     sido_code: str,
     per_query: int,
     limit_queries: int | None = None,
+    start: int = 1,
 ) -> int:
+    """start>1 이면 같은 쿼리의 뒷순위 글을 추가 수집 (예: --start 31 --per-query 70 → 31~100번째)."""
     out_path = Path(str(OUT_PATH).format(code=sido_code))
     queries = build_queries(sido_code, sigungus)
     if limit_queries:
         queries = queries[:limit_queries]
     done_q = _load_progress(sido_code)
     seen_links = load_ids(out_path, "link")
-    todo = [q for q in queries if q["query"] not in done_q]
+    key = (lambda q: q["query"]) if start == 1 else (lambda q: f"{q['query']}@{start}")
+    todo = [q for q in queries if key(q) not in done_q]
     log.info(
         "%s 블로그: 쿼리 %d개 (완료 %d, 남음 %d), 기존 글 %d건",
         regions.sido_name(sido_code), len(queries), len(done_q), len(todo), len(seen_links),
@@ -206,7 +229,7 @@ def collect_blogs(
     n_calls = 0
     try:
         for q in todo:
-            items = client.search(q["query"], display=per_query)
+            items = client.search(q["query"], display=per_query, start=start)
             n_calls += 1
             for it in items:
                 post = normalize_post(it, q, sido_code)
@@ -217,7 +240,7 @@ def collect_blogs(
                     merge_post(new_posts[link], post)
                 else:
                     new_posts[link] = post
-            done_q.add(q["query"])
+            done_q.add(key(q))
             if n_calls % 20 == 0:
                 write_jsonl(out_path, new_posts.values(), append=True)
                 seen_links.update(new_posts)
@@ -242,6 +265,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--all", action="store_true", help="수도권 제외 나머지 시도 (2주차)")
     ap.add_argument("--per-query", type=int, default=30, help="쿼리당 가져올 글 수 (최대 100)")
     ap.add_argument("--limit-queries", type=int, default=None, help="시도별 쿼리 상한 (연결 확인용)")
+    ap.add_argument("--start", type=int, default=1, help="검색 시작 순위 (기본 1). 추가 수집: --start 31 --per-query 70")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
 
@@ -253,7 +277,7 @@ def main(argv: list[str] | None = None) -> None:
 
     for code in areas:
         sigungus = tour.fetch_sigungu(code)
-        collect_blogs(client, sigungus, code, args.per_query, args.limit_queries)
+        collect_blogs(client, sigungus, code, args.per_query, args.limit_queries, start=args.start)
         if client.quota.exhausted():
             log.warning("네이버 오늘 한도 소진. 내일 같은 명령으로 이어서")
             break

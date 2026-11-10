@@ -170,13 +170,12 @@ def stats(vs) -> None:
     print(f"컬렉션 {COLLECTION}: {total} 청크 @ {settings.vectorstore_dir}")
     if total == 0:
         return
-    sample = col.get(limit=min(total, 5000), include=["metadatas"])["metadatas"]
-    from collections import Counter
+    def count(where: dict[str, Any]) -> int:
+        return len(col.get(where=where, include=[])["ids"])
 
-    print("  doc_type:", dict(Counter(m["doc_type"] for m in sample)))
-    print("  sido:", dict(Counter(m["sido_code"] for m in sample)))
-    tag_counts = {t: sum(1 for m in sample if m.get(k)) for t, k in TAG_KEYS.items()}
-    print("  tags(샘플 기준):", tag_counts)
+    print("  doc_type:", {t: count({"doc_type": t}) for t in ("place", "blog")})
+    print("  sido:", {regions.sido_name(c): count({"sido_code": c}) for c in regions.SIDO if count({"sido_code": c})})
+    print("  tags:", {t: count({k: True}) for t, k in TAG_KEYS.items()})
 
 
 def main(argv: list[str] | None = None) -> None:

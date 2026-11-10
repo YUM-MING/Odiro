@@ -41,11 +41,11 @@
 
 | # | 데이터 | 소스 | 규모 | 용도 | 산출물 경로 | 담당 |
 |---|---|---|---|---|---|---|
-| D1 | **수도권 장소 메타** (서울 1 · 인천 2 · 경기 31) | TourAPI `areaBasedList2` (`numOfRows=1000`) | 약 1.3~1.5만 건, 호출 30회 미만 | 코스 후보 풀 (최우선) | `data/raw/tour/area_{시도코드}.jsonl` | 1주차 |
-| D2 | **수도권 장소 상세** (overview) | TourAPI `detailCommon2` | 개발계정 일 1,000건 → 우선순위 상위 약 3,000곳 사전 수집, 나머지는 지연 호출 | 장소 설명 임베딩 | `data/raw/tour/detail_{시도코드}.jsonl` | 1주차 |
-| D3 | **수도권 블로그 큐레이션 글** | 네이버 블로그 검색 | 66 시군구 × 테마 10 × 상위 30건 ≈ 1.5~2만 건 (쿼리 660회) | RAG 원문 (분위기) | `data/raw/blog/area_{시도코드}.jsonl` | 1주차 |
-| D4 | **분위기 태그 라벨링** (D2+D3) | LLM (gpt-4o-mini) | ≈ 2만 건, 약 5~8달러 | 메타데이터 필터 | `data/raw/labeled/area_{시도코드}.jsonl` | 1주차 |
-| D5 | **벡터 인덱스** (D4) | OpenAI embedding + Chroma | 3~5만 청크, 1달러 미만 | `rag_search` Tool | `data/vectorstore/` (git 제외, 압축본 공유) | 1주차 |
+| D1 | **수도권 장소 메타** (법정동 시도코드 서울 11 · 인천 28 · 경기 41) | TourAPI `areaBasedList2` (`lDongRegnCd`, `numOfRows=1000`) | **실측 19,424건** (서울 8,008 / 인천 1,987 / 경기 9,429), 호출 48회 | 코스 후보 풀 (최우선) | `data/raw/tour/area_{시도코드}.jsonl` | 1주차 ✅ |
+| D2 | **수도권 장소 상세** (overview) | TourAPI `detailCommon2` | 개발계정 기능별 일 1,000건 → 관광지→문화→음식점 순으로 매일 이어서. **11/11 기준 서울 999건** | 장소 설명 임베딩 | `data/raw/tour/detail_{시도코드}.jsonl` | 1주차 (매일 1회 실행) |
+| D3 | **수도권 블로그 큐레이션 글** | 네이버 블로그 검색 (NCP API HUB) | 시군구 × 테마 11 × 상위 30건 → **실측 22,580건** (서울 5,844 / 인천 3,031 / 경기 13,705), 쿼리 ~1,000회. `--start 31 --per-query 70` 으로 100건까지 확장 가능 | RAG 원문 (분위기) | `data/raw/blog/area_{시도코드}.jsonl` | 1주차 ✅ |
+| D4 | **분위기 태그 라벨링** (D2+D3) | gpt-4o-mini Structured Output, 10건 묶음 | **실측 23,579건**, 광고 판정 ~100건, 약 2달러 | 메타데이터 필터 | `data/raw/labeled/area_{시도코드}.jsonl` | 1주차 ✅ |
+| D5 | **벡터 인덱스** (D4) | text-embedding-3-small + Chroma | **실측 23,153청크, 250MB** | `rag_search` Tool | `data/vectorstore/` (git 제외, 압축본 공유) | 1주차 ✅ |
 | D6 | **나머지 14개 시도 장소 메타** | TourAPI `areaBasedList2` | 4~5만 건, 호출 100회 미만 | "전국 어디를 입력해도 동작" 보장 | `data/raw/tour/area_{시도코드}.jsonl` | **2주차** |
 | D7 | **나머지 시도 블로그 큐레이션 글** | 네이버 블로그 검색 | 163 시군구 × 테마 10 ≈ 1,630 쿼리 | 전국 RAG | `data/raw/blog/area_{시도코드}.jsonl` | **2주차** (스크립트 돌려두고 다른 작업) |
 | D8 | **나머지 시도 라벨링 + 인덱스 확장** | LLM + Chroma | 5~10만 건, 15~30달러 → **예산 보고 샘플링** | 전국 RAG 품질 | `data/vectorstore/` | 2주차 (시간 남으면), 아니면 3주차 |

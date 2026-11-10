@@ -122,7 +122,7 @@ def place_docs(sido_code: str) -> Iterator[dict[str, Any]]:
 def blog_docs(sido_code: str) -> Iterator[dict[str, Any]]:
     for b in read_jsonl(BLOG_DIR / f"area_{sido_code}.jsonl"):
         text = b["description"]
-        if len(text) < MIN_TEXT_LEN:
+        if len(text) < MIN_TEXT_LEN or b.get("off_region"):
             continue
         yield {
             "doc_id": f"blog:{b['link']}",

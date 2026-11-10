@@ -1,0 +1,79 @@
+# main 에 push 되면 백엔드(Cloud Run) + 프론트(Firebase Hosting) 자동 배포.
+#
+# 활성화 조건 (1회, Cloud Shell 에서 `bash scripts/setup_ci.sh`):
+#   - GitHub Secret  GCP_SA_KEY   : 배포용 서비스 계정 JSON 키
+#   - GitHub Variable CI_ENABLED  : "true"
+# 벡터 DB(data/vectorstore, git 제외)는 GCS 에서 받아 이미지에 포함한다:
+#   - GitHub Variable VECTORSTORE_GCS_URI : 예) gs://odiro-where-data/vectorstore.tgz  (없으면 벡터 DB 없이 배포)
+# API 키는 여기서 다루지 않는다 → Cloud Run 콘솔 환경변수에 직접 등록 (DATA_AND_API.md).
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  PROJECT: odiro-where
+  REGION: asia-northeast3
+  SERVICE: odiro-api
+
+jobs:
+  backend:
+    if: vars.CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT }}
+
+      - name: Fetch vectorstore from GCS (optional)
+        if: vars.VECTORSTORE_GCS_URI != ''
+        run: |
+          gsutil cp "${{ vars.VECTORSTORE_GCS_URI }}" /tmp/vectorstore.tgz
+          mkdir -p data/vectorstore
+          tar xzf /tmp/vectorstore.tgz -C data/
+          du -sh data/vectorstore
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE" --source . --region "$REGION" --project "$PROJECT" \
+            --min-instances 0 --max-instances 1 --memory 1Gi --cpu 1 --timeout 120 \
+            --allow-unauthenticated --quiet
+
+  frontend:
+    if: vars.CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy to Firebase Hosting
+        run: npx firebase-tools@latest deploy --only hosting --project "$PROJECT" --non-interactive
