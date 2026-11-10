@@ -44,7 +44,7 @@ from odiro.data.ingest.common import (
 from odiro.data.ingest.tour_api import merge_meta_detail
 
 BATCH = 10
-WORKERS = 4
+WORKERS = 8
 MIN_TEXT_LEN = 30  # 이보다 짧은 텍스트는 분위기를 판단할 수 없어 라벨링하지 않는다
 OUT_PATH = LABELED_DIR / "area_{code}.jsonl"
 

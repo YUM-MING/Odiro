@@ -1,8 +1,12 @@
-"""LangGraph 상태 정의. PLAN.md 5-3 참고."""
+"""LangGraph 상태 정의. PLAN.md 5-3 참고.
+
+노드 사이를 오가는 값은 전부 JSON 으로 직렬화 가능한 dict/list 로 둔다 (SSE·캐시·디버깅이 쉬워서).
+Place/Leg Pydantic 모델은 타입 참고용 + 테스트용이며, API 응답 스키마는 odiro.api.schemas 가 따로 정의한다.
+"""
 
 from __future__ import annotations
 
-from typing import Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -45,34 +49,39 @@ class EditRequest(BaseModel):
 
 
 class CourseState(TypedDict, total=False):
-    # 입력 조건 (GUI + 자연어)
-    mode: Literal["outing", "trip"]
-    transport: Literal["walk", "car"]
-    region: str
-    date: str  # YYYY-MM-DD
-    time_window: tuple[str, str]
-    days: int
-    budget: int
-    moods: list[str]
-    free_text: str
+    # 입력 (CourseRequest.model_dump())
+    request: dict[str, Any]
 
-    # 대화
-    messages: list
+    # parse_intent
+    center: dict[str, Any] | None  # {lat, lng, label, name}
+    region_filter: dict[str, str]  # rag_search.resolve_region 결과
+    conditions: str  # 프롬프트용 조건 요약
+    per_day: int
 
-    # 검색 결과
-    rag_docs: list
-    web_docs: list
+    # retrieve
+    rag_docs: list[dict[str, Any]]
+    web_docs: list[dict[str, Any]]
+    weather: dict[str, Any]
+    sun_times: dict[str, str]
 
-    # 코스
-    candidates: list[Place]
-    verified: list[Place]
-    route: list[Leg]
+    # draft / verify
+    title: str
+    candidates: list[dict[str, Any]]
+    verified: list[dict[str, Any]]
+    rejected: list[str]
+    retry_count: int
 
-    # 부가 정보
-    sun_times: dict
-    weather: dict
+    # route / enrich
+    places: list[dict[str, Any]]
+    legs: list[dict[str, Any]]
+
+    # 수정 플라이휠
+    instruction: str
+    target_index: int | None
+    edit_note: str
+    full_redraft: bool
 
     # 출력
     final_answer: str
-    pending_edit: Optional[EditRequest]
-    retry_count: int
+    warnings: list[str]
+    trace: list[dict[str, Any]]

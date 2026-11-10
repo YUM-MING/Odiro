@@ -11,9 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import httpx  # noqa: E402
+import httpx
 
-from odiro.config import settings  # noqa: E402
+from odiro.config import settings
 
 TIMEOUT = 10
 # 테스트 좌표: 성수역 -> 서울숲
