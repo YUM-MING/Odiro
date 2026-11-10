@@ -12,8 +12,8 @@
 | 3 | **Kakao Map JS** | 프론트 지도 표시 | `KAKAO_JS_API_KEY` | 2번과 같은 앱의 JavaScript 키. **플랫폼 → Web → 사이트 도메인에 `https://odiro-where.web.app`, `http://localhost:5173` 등록 필수** | 무료 | 쉬움 | 1주차 |
 | 4 | **Kakao Mobility** (자차 길찾기) | 자동차 이동시간·경로 | `KAKAO_MOBILITY_API_KEY` | https://developers.kakaomobility.com → 앱 등록 (카카오디벨로퍼스와 **별도** 사이트) | 일 1만 회 | 보통 | 1주차 |
 | 5 | **Tmap** (보행자 길찾기) | 뚜벅이 이동시간·경로 | `TMAP_APP_KEY` | https://openapi.sk.com → 앱 생성 → appKey | 일 1만 회 | 보통 | 1주차 |
-| 6 | **TourAPI 4.0** (한국관광공사) | 전국 장소 메타데이터 대량 수집 | `TOUR_API_KEY` | https://www.data.go.kr → "한국관광공사_국문 관광정보 서비스_GW" 활용신청 → **일반 인증키(Decoding)** | 개발계정 일 1,000건 → **운영계정 증량 신청 필수** (승인 1~3일) | 느림 ⚠️ **가장 먼저 신청** | 1주차 |
-| 7 | **네이버 검색 API** (블로그) | 큐레이션 글 수집 (RAG 원문) | `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` | https://developers.naver.com → 애플리케이션 등록 → 검색 API 체크 | 일 25,000회 | 쉬움 | 1주차 |
+| 6 | **TourAPI 4.0** (한국관광공사) | 전국 장소 메타데이터 대량 수집 | `TOUR_API_KEY` | https://www.data.go.kr → "한국관광공사_국문 관광정보 서비스_GW" 활용신청 → **일반 인증키(Decoding)** | **개발계정** 기능별 일 1,000건 (자동승인, 즉시). 운영계정은 **호출 이력 없으면 반려**되므로 개발계정으로 수집해 이력을 쌓은 뒤 "운영계정 전환 신청" (심의 영업일 2~7일) | 보통 (개발계정) / 느림 (운영 전환) | 1주차 발급 · 1주차 말 운영 전환 신청 |
+| 7 | **네이버 검색 API** (블로그) | 큐레이션 글 수집 (RAG 원문) | `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` | **네이버 클라우드 플랫폼** https://console.ncloud.com → Services → Application Services → **NAVER API HUB** → Application 등록(검색 API 체크) → 인증 정보. 2026-07-31 이관으로 developers.naver.com 에서는 신규 발급 불가. 엔드포인트 `https://naverapihub.apigw.ntruss.com/search/v1/blog`, 헤더 `X-NCP-APIGW-API-KEY-ID` / `X-NCP-APIGW-API-KEY` | 일 25,000회 (한시 무료) | 쉬움 (NCP 가입·결제수단 등록 필요) | 1주차 |
 | 8 | **Tavily** | 실시간 웹검색 (팝업·휴무·핫플) | `TAVILY_API_KEY` | https://tavily.com | 월 1,000회 | 쉬움 | 2주차 |
 | 9 | **OpenWeather** | 날씨·강수확률 → 실내 전환 | `OPENWEATHER_API_KEY` | https://openweathermap.org/api → Current + 5 day forecast | 분 60회 / 일 100만 | 쉬움 (활성화까지 ~2시간) | 2주차 |
 | 10 | 기상청 단기예보 (선택) | OpenWeather 대체 | `KMA_API_KEY` | data.go.kr "기상청_단기예보 조회서비스" | 일 10,000건 | 보통 | 생략 가능 |
@@ -41,18 +41,18 @@
 
 | # | 데이터 | 소스 | 규모 | 용도 | 산출물 경로 | 담당 |
 |---|---|---|---|---|---|---|
-| D1 | **시연 지역 3곳 장소 메타** (성수·강릉·전주) | TourAPI `areaBasedList2` | 약 3,000건 | 코스 후보 풀 (최우선) | `data/raw/tour/{지역}.jsonl` | 1주차 |
-| D2 | **시연 지역 3곳 장소 상세** (overview) | TourAPI `detailCommon2` | 약 3,000회 호출 | 장소 설명 임베딩 | `data/raw/tour/{지역}_detail.jsonl` | 1주차 |
-| D3 | **시연 지역 블로그 큐레이션 글** | 네이버 블로그 검색 | 3지역 × 테마 10 × 100건 ≈ 3,000건 | RAG 원문 (분위기) | `data/raw/blog/{지역}.jsonl` | 1주차 |
-| D4 | **분위기 태그 라벨링** (D2+D3) | LLM (gpt-4o-mini) | ≈ 6,000건, 약 2~3달러 | 메타데이터 필터 | `data/raw/labeled/{지역}.jsonl` | 1주차 |
-| D5 | **벡터 인덱스** (D4) | OpenAI embedding + Chroma | 1~2만 청크 | `rag_search` Tool | `data/vectorstore/` (git 제외, 압축본 공유) | 1주차 |
-| D6 | **전국 장소 메타** (17개 시도) | TourAPI `areaBasedList2` | 5~6만 건, 호출 100회 미만 | "전국 어디를 입력해도 동작" 보장 | `data/raw/tour/all_{시도}.jsonl` | **2주차** |
-| D7 | **전국 블로그 큐레이션 글** | 네이버 블로그 검색 | 229 시군구 × 테마 10 ≈ 2,300 쿼리 | 전국 RAG | `data/raw/blog/all/` | **2주차** (스크립트 돌려두고 다른 작업) |
-| D8 | **전국 라벨링 + 인덱스 확장** | LLM + Chroma | 10~20만 건, 20~40달러 → **예산 보고 샘플링** | 전국 RAG 품질 | `data/vectorstore/` | 2주차 (시간 남으면), 아니면 3주차 |
-| D9 | **시연 시나리오 캐시** | 완성된 파이프라인 실행 결과 | 3개 시나리오 | 시연 안정성 (네트워크 죽어도 동작) | `cache/demo/*.json` | 3주차 |
+| D1 | **수도권 장소 메타** (서울 1 · 인천 2 · 경기 31) | TourAPI `areaBasedList2` (`numOfRows=1000`) | 약 1.3~1.5만 건, 호출 30회 미만 | 코스 후보 풀 (최우선) | `data/raw/tour/area_{시도코드}.jsonl` | 1주차 |
+| D2 | **수도권 장소 상세** (overview) | TourAPI `detailCommon2` | 개발계정 일 1,000건 → 우선순위 상위 약 3,000곳 사전 수집, 나머지는 지연 호출 | 장소 설명 임베딩 | `data/raw/tour/detail_{시도코드}.jsonl` | 1주차 |
+| D3 | **수도권 블로그 큐레이션 글** | 네이버 블로그 검색 | 66 시군구 × 테마 10 × 상위 30건 ≈ 1.5~2만 건 (쿼리 660회) | RAG 원문 (분위기) | `data/raw/blog/area_{시도코드}.jsonl` | 1주차 |
+| D4 | **분위기 태그 라벨링** (D2+D3) | LLM (gpt-4o-mini) | ≈ 2만 건, 약 5~8달러 | 메타데이터 필터 | `data/raw/labeled/area_{시도코드}.jsonl` | 1주차 |
+| D5 | **벡터 인덱스** (D4) | OpenAI embedding + Chroma | 3~5만 청크, 1달러 미만 | `rag_search` Tool | `data/vectorstore/` (git 제외, 압축본 공유) | 1주차 |
+| D6 | **나머지 14개 시도 장소 메타** | TourAPI `areaBasedList2` | 4~5만 건, 호출 100회 미만 | "전국 어디를 입력해도 동작" 보장 | `data/raw/tour/area_{시도코드}.jsonl` | **2주차** |
+| D7 | **나머지 시도 블로그 큐레이션 글** | 네이버 블로그 검색 | 163 시군구 × 테마 10 ≈ 1,630 쿼리 | 전국 RAG | `data/raw/blog/area_{시도코드}.jsonl` | **2주차** (스크립트 돌려두고 다른 작업) |
+| D8 | **나머지 시도 라벨링 + 인덱스 확장** | LLM + Chroma | 5~10만 건, 15~30달러 → **예산 보고 샘플링** | 전국 RAG 품질 | `data/vectorstore/` | 2주차 (시간 남으면), 아니면 3주차 |
+| D9 | **시연 시나리오 캐시** | 완성된 파이프라인 실행 결과 | 3개 시나리오 (성수동 / 양평·가평 / 인천 송도) | 시연 안정성 (네트워크 죽어도 동작) | `cache/demo/*.json` | 3주차 |
 
-- D1~D5 가 끝나면 Phase 1 완료 (= 1주차 목표). D6~D8 은 양이 커서 **2주차가 수집 스크립트를 백그라운드로 돌리면서** 에이전트 작업을 병행한다.
-- TourAPI 상세(D2·D6 상세)는 전수 호출이 비싸므로 **코스 생성 시 후보 장소만 지연 호출 + diskcache** 전략을 기본으로 하고, 사전 수집은 시연 지역만.
+- **지역 분담**: 서비스 목표는 전국. 1주차(YUM-MING)가 수도권(서울·인천·경기)을 D1~D5 까지 끝내면 Phase 1 완료. 나머지 14개 시도(D6~D8)는 양이 커서 **2주차가 같은 스크립트를 `--all` 로 백그라운드로 돌리면서** 에이전트 작업을 병행한다. 파일명은 시도코드 기준으로 통일해 두 사람의 산출물이 그대로 합쳐지게 한다.
+- TourAPI 상세(D2·D6 상세)는 전수 호출이 비싸므로 **코스 생성 시 후보 장소만 지연 호출 + diskcache** 전략을 기본으로 하고, 사전 수집은 우선순위 상위(관광지·음식점·카페 중 블로그 언급 많은 곳)만.
 - 수집 스크립트 위치: `odiro/data/ingest/` (`tour_api.py`, `naver_blog.py`, `labeling.py`, `build_index.py` — 1주차가 만든다).
 
 ### 2-2. 데이터 공유 방법 (git 에 안 올라감)

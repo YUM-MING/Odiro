@@ -24,6 +24,19 @@ pytest
 uvicorn odiro.api.main:app --reload   # http://localhost:8000/docs
 ```
 
+## 데이터 수집 → 라벨링 → 인덱스 (Phase 1)
+
+```powershell
+# 모두 재실행 안전(이미 받은 건 건너뜀). 기본 대상은 수도권(서울 11·인천 28·경기 41), 2주차는 --all 로 나머지 시도.
+python -m odiro.data.ingest.tour_api        # TourAPI 메타(전수) + 상세(개발계정 일 1,000건까지, 내일 다시 실행하면 이어서)
+python -m odiro.data.ingest.naver_blog      # 네이버 블로그 (시군구 × 테마, 쿼리당 30건)
+python -m odiro.data.ingest.labeling        # gpt-4o-mini 분위기 태그 (문서 1만 건 ≈ 1달러)
+python -m odiro.data.ingest.build_index     # Chroma 적재 (OpenAI 임베딩) → data/vectorstore
+python -m odiro.tools.rag_search "성수동 조용한 카페 데이트"   # 검색 확인
+```
+
+각 스크립트는 `--help` 로 옵션 확인. 산출물 위치·규모는 [docs/DATA_AND_API.md](docs/DATA_AND_API.md) 2-1 표 참고.
+
 ## 프론트 시작
 
 ```powershell
@@ -58,8 +71,8 @@ trip/
 │  ├─ config.py           # 환경변수 (settings)
 │  ├─ api/main.py         # FastAPI 엔드포인트
 │  ├─ agent/              # LangGraph 그래프·상태
-│  ├─ tools/              # 자체 Tool 6개
-│  └─ data/ingest/        # TourAPI·블로그 수집, 라벨링, 인덱싱
+│  ├─ tools/              # 자체 Tool 6개 (rag_search.py 구현됨, 나머지 2주차)
+│  └─ data/ingest/        # regions(코드표) · common(유틸) · tour_api · naver_blog · labeling · build_index
 ├─ frontend/              # React 앱
 │  ├─ src/api.ts          # 백엔드 호출
 │  ├─ src/App.tsx

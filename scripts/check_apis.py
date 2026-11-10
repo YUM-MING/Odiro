@@ -130,12 +130,14 @@ def check_naver_blog() -> None:
     if not (settings.naver_client_id and settings.naver_client_secret):
         return _report("Naver Blog 검색", None, "NAVER_CLIENT_ID/SECRET 없음")
     try:
+        # 2026-07-31 부터 검색 API 는 네이버 클라우드 플랫폼 "NAVER API HUB" 에서 발급·호출한다.
+        # (구 developers.naver.com 키는 2027-06-30 까지만 동작)
         r = httpx.get(
-            "https://openapi.naver.com/v1/search/blog.json",
+            "https://naverapihub.apigw.ntruss.com/search/v1/blog",
             params={"query": "성수동 데이트 코스", "display": 3, "sort": "sim"},
             headers={
-                "X-Naver-Client-Id": settings.naver_client_id,
-                "X-Naver-Client-Secret": settings.naver_client_secret,
+                "X-NCP-APIGW-API-KEY-ID": settings.naver_client_id,
+                "X-NCP-APIGW-API-KEY": settings.naver_client_secret,
             },
             timeout=TIMEOUT,
         )
