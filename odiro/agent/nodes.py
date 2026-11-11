@@ -904,6 +904,40 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
             cands[i] = {**c, **h, "source": "rag", "verified": True}
             known_used += 1
 
+    # 볼거리가 하나도 없는 날(카페·식당만 이어지는 코스)은 남는 카페/식당 한 자리를 큐레이션 장소(좌표 있는 관광지 문서)로 바꾼다
+    play_added = 0
+    if not slot:
+        rain = bool((state.get("weather") or {}).get("rain"))
+        for day in sorted({c["day"] for c in cands if c["verified"]}):
+            idxs = [i for i, c in enumerate(cands) if c["verified"] and c["day"] == day and c.get("category") != "숙소"]
+            if len(idxs) < 3 or any(cands[i].get("category") in PLAY_CATEGORIES for i in idxs):
+                continue
+            cafes = [i for i in idxs if cands[i].get("category") == "카페"]
+            eats = [i for i in idxs if cands[i].get("category") == "식당"]
+            victim = cafes[-1] if len(cafes) >= 2 else (eats[-1] if len(eats) >= 2 else None)
+            if victim is None:
+                continue
+            in_use = {x["name"] for x in cands if x["verified"]}
+            hub = _centroid([cands[i] for i in idxs])
+            pool = [
+                d for d in state.get("rag_docs", [])
+                if d.get("doc_type") == "place" and d.get("lat") and d.get("lng") and d.get("title") not in in_use
+                and not (walk and haversine_m(hub[0], hub[1], float(d["lat"]), float(d["lng"])) > WALK_OUTLIER_M)
+            ]
+            indoor = [d for d in pool if not _is_outdoor({"category": "관광지", "name": d["title"]})]
+            pool = (indoor or pool) if rain else pool  # 비 예보면 실내 우선, 없으면 야외라도 한 곳은 넣는다
+            if not pool:
+                continue
+            d = min(pool, key=lambda x: haversine_m(hub[0], hub[1], float(x["lat"]), float(x["lng"])))
+            old = cands[victim]
+            cands[victim] = {
+                "name": d["title"], "category": "관광지", "reason": d.get("one_line") or "이 지역에서 들러 볼 만한 곳", "stay_min": 90,
+                "indoor": not _is_outdoor({"category": "관광지", "name": d["title"]}), "tags": [], "source": "rag", "est_cost": 0,
+                "day": day, "order": old["order"], "verified": True, "lat": float(d["lat"]), "lng": float(d["lng"]),
+                "address": d.get("addr") or "", "kakao_place_id": "", "image": d.get("image") or "",
+            }
+            play_added += 1
+
     warnings = list(state.get("warnings", []))
     extra: dict[str, Any] = {}
     for i, c in enumerate(cands):
@@ -1023,6 +1057,8 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
         detail += f", 숙소 {stays_added}곳 보충"
     if known_used:
         detail += f", 확인된 후보로 {known_used}곳 채움"
+    if play_added:
+        detail += f", 볼거리 {play_added}곳 추가"
     if regrouped:
         detail += ", 가까운 곳끼리 날짜 재배정"
     if must_added:

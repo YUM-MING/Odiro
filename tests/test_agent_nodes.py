@@ -280,3 +280,14 @@ def test_unverified_slots_are_filled_from_known_real_places(fake_verify):
     ]
     out = nodes.verify_places(_state(cands, poi_docs=pois, rag_docs=rag, weather={"rain": True}, request={"transport": "car"}))
     assert [p["name"] for p in out["verified"]] == ["A", "B", "실존카페", "실존박물관"]
+
+
+def test_day_with_only_cafes_and_restaurants_gets_an_attraction(fake_verify):
+    cands = [_p("카페1", "카페"), _p("식당1", "식당"), _p("카페2", "카페"), _p("식당2", "식당")]
+    rag = [
+        {"doc_type": "place", "title": "호수공원", "lat": 37.5446, "lng": 127.0561, "addr": ""},
+        {"doc_type": "place", "title": "실존미술관", "lat": 37.5450, "lng": 127.0563, "addr": "", "one_line": "실내 전시"},
+    ]
+    out = nodes.verify_places(_state(cands, rag_docs=rag, weather={"rain": True}, request={"transport": "car"}))
+    names = [p["name"] for p in out["verified"]]
+    assert names == ["카페1", "식당1", "실존미술관", "식당2"]  # 남는 카페 자리를 실내 볼거리로 (비 예보 → 공원보다 미술관)
