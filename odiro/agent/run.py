@@ -171,7 +171,7 @@ def run_edit(edit: EditRequest, on_progress: Progress | None = None) -> CourseRe
         "per_day": nodes._places_per_day(req.model_dump()),
         "rag_docs": rag_docs,
         "web_docs": [],
-        "weather": {"available": False, "rain": course.meta.weather.rain, "summary": course.meta.weather.summary, "pop": course.meta.weather.pop, "note": ""},
+        "weather": course.meta.weather.model_dump(),  # 원래 코스의 예보를 그대로 이어받는다
         "sun_times": {"sunrise": course.meta.sun.sunrise, "sunset": course.meta.sun.sunset},
         "title": course.title,
         "places": places,

@@ -62,12 +62,14 @@ class CourseState(TypedDict, total=False):
     rag_docs: list[dict[str, Any]]
     web_docs: list[dict[str, Any]]
     poi_docs: list[dict[str, Any]]  # 중심 주변 실존 식당·카페 (카카오)
+    stay_docs: list[dict[str, Any]]  # 여행 모드: 주변 실존 숙소 (카카오)
     weather: dict[str, Any]
     sun_times: dict[str, str]
 
     # draft / verify
     title: str
     candidates: list[dict[str, Any]]
+    spares: list[dict[str, Any]]  # 예비 후보 (스키마에 없으면 LangGraph 가 버려서 verify 까지 전달되지 않는다)
     verified: list[dict[str, Any]]
     rejected: list[str]
     retry_count: int
@@ -80,6 +82,7 @@ class CourseState(TypedDict, total=False):
     instruction: str
     target_index: int | None
     edit_note: str
+    edit_slot: dict[str, Any] | None  # {index, old(원래 장소), planned(처음 고른 교체 장소명)}
     full_redraft: bool
 
     # 출력
