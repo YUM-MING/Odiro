@@ -246,6 +246,33 @@ def _near_center(docs: list[dict[str, Any]], center: dict[str, Any], radius_m: i
     ]
 
 
+def _find_attractions(req: dict[str, Any], hub: tuple[float, float], rain: bool) -> list[dict[str, Any]]:
+    """hub 주변의 실존 볼거리 (카카오 관광명소 AT4 · 문화시설 CT1). 비 예보면 실내 시설 검색어를 먼저 쓴다.
+
+    큐레이션 장소 문서(TourAPI 상세)가 아직 서울만 있어서, 다른 지역은 이걸로 볼거리 후보를 보충한다.
+    반환 형식은 rag 장소 문서와 맞춘다: {title, lat, lng, addr, kakao_place_id, place_url, one_line}
+    """
+    radius = WALK_OUTLIER_M if req.get("transport", "walk") == "walk" else 15000
+    words = (["박물관", "미술관", "전시관"] if rain else []) + ["관광명소", "가볼만한곳"]
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        for w in words:
+            for h in search_place.search(f"{req['region']} {w}", hub[0], hub[1], radius, size=10):
+                if h.get("category_group") in ("AT4", "CT1") and h.get("kakao_place_id") not in seen:
+                    seen.add(h.get("kakao_place_id"))
+                    out.append({
+                        "doc_type": "place", "title": h["name"], "lat": h["lat"], "lng": h["lng"], "addr": h.get("address", ""),
+                        "kakao_place_id": h.get("kakao_place_id", ""), "place_url": h.get("place_url", ""),
+                        "one_line": (h.get("category_full") or "").split(" > ")[-1],
+                    })
+            if len(out) >= 6:
+                break
+    except Exception as e:  # noqa: BLE001
+        log.warning("볼거리 검색 실패: %s", e)
+    return out
+
+
 def _find_stays(req: dict[str, Any], center: dict[str, Any] | None) -> list[dict[str, Any]]:
     """중심 주변의 실존 숙소 (카카오 카테고리 AD5)."""
     if not center:
@@ -919,9 +946,10 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
                 continue
             in_use = {x["name"] for x in cands if x["verified"]}
             hub = _centroid([cands[i] for i in idxs])
+            known = [d for d in state.get("rag_docs", []) if d.get("doc_type") == "place" and d.get("lat") and d.get("lng")]
             pool = [
-                d for d in state.get("rag_docs", [])
-                if d.get("doc_type") == "place" and d.get("lat") and d.get("lng") and d.get("title") not in in_use
+                d for d in (known or _find_attractions(req, hub, rain))
+                if d.get("title") not in in_use
                 and not (walk and haversine_m(hub[0], hub[1], float(d["lat"]), float(d["lng"])) > WALK_OUTLIER_M)
             ]
             indoor = [d for d in pool if not _is_outdoor({"category": "관광지", "name": d["title"]})]
@@ -931,10 +959,11 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
             d = min(pool, key=lambda x: haversine_m(hub[0], hub[1], float(x["lat"]), float(x["lng"])))
             old = cands[victim]
             cands[victim] = {
-                "name": d["title"], "category": "관광지", "reason": d.get("one_line") or "이 지역에서 들러 볼 만한 곳", "stay_min": 90,
+                "name": d["title"], "category": "관광지", "reason": f"이 지역에서 들러 볼 만한 곳 ({d['one_line']})" if d.get("one_line") else "이 지역에서 들러 볼 만한 곳", "stay_min": 90,
                 "indoor": not _is_outdoor({"category": "관광지", "name": d["title"]}), "tags": [], "source": "rag", "est_cost": 0,
                 "day": day, "order": old["order"], "verified": True, "lat": float(d["lat"]), "lng": float(d["lng"]),
-                "address": d.get("addr") or "", "kakao_place_id": "", "image": d.get("image") or "",
+                "address": d.get("addr") or "", "kakao_place_id": d.get("kakao_place_id", ""), "place_url": d.get("place_url", ""),
+                "image": d.get("image") or "",
             }
             play_added += 1
 

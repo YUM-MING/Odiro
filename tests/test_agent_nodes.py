@@ -291,3 +291,12 @@ def test_day_with_only_cafes_and_restaurants_gets_an_attraction(fake_verify):
     out = nodes.verify_places(_state(cands, rag_docs=rag, weather={"rain": True}, request={"transport": "car"}))
     names = [p["name"] for p in out["verified"]]
     assert names == ["카페1", "식당1", "실존미술관", "식당2"]  # 남는 카페 자리를 실내 볼거리로 (비 예보 → 공원보다 미술관)
+
+
+def test_attraction_comes_from_map_search_when_no_curated_place_docs(fake_verify, monkeypatch):
+    # 서울 밖은 큐레이션 장소 문서가 아직 없다 → 지도에서 찾은 볼거리로 채운다
+    found = [{"doc_type": "place", "title": "가평레일파크", "lat": 37.5449, "lng": 127.0562, "addr": "", "kakao_place_id": "k1", "place_url": "", "one_line": "테마파크"}]
+    monkeypatch.setattr(nodes, "_find_attractions", lambda req, hub, rain: found)
+    cands = [_p("카페1", "카페"), _p("식당1", "식당"), _p("카페2", "카페")]
+    out = nodes.verify_places(_state(cands, rag_docs=[{"doc_type": "blog", "title": "가평 카페 후기"}], request={"transport": "car"}))
+    assert [p["name"] for p in out["verified"]] == ["카페1", "식당1", "가평레일파크"]
