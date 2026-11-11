@@ -28,6 +28,7 @@ export function defaultRequest(): CourseRequest {
     moods: [],
     free_text: '',
     party: '',
+    lodging: '',
   }
 }
 
@@ -47,7 +48,10 @@ export const PRESETS: Preset[] = [
 
 export function applyPreset(base: CourseRequest, p: Preset): CourseRequest {
   const next = { ...base, ...p.patch }
-  if (next.mode === 'outing') next.days = 1
+  if (next.mode === 'outing') {
+    next.days = 1
+    next.lodging = ''
+  }
   return next
 }
 

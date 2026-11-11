@@ -184,3 +184,99 @@ def test_duplicate_place_is_refilled_from_spares(fake_verify):
     cands = [_p("A"), _p("B", "식당"), _p("A", order=3)]  # 같은 장소가 두 번
     out = nodes.verify_places(_state(cands, [_p("C")], request={"transport": "car"}))
     assert [p["name"] for p in out["verified"]] == ["A", "B", "C"]
+
+
+# ---------- 여행: 권역별 날짜 묶기 · 숙소 · 꼭 넣을 곳 ----------
+
+
+def test_regroup_days_puts_nearby_places_on_the_same_day():
+    # 북쪽 권역(37.90)과 남쪽 권역(37.70)이 날마다 섞여 있는 초안
+    places = [
+        _p("북1", day=1, order=1, lat=37.90), _p("남식당", "식당", day=1, order=2, lat=37.70), _p("남1", day=1, order=3, lat=37.71),
+        _p("남2", day=2, order=1, lat=37.69), _p("북식당", "식당", day=2, order=2, lat=37.91), _p("북2", day=2, order=3, lat=37.89),
+    ]
+    out = nodes._regroup_days(places, 2)
+    by_day = {d: {p["name"] for p in out if p["day"] == d} for d in (1, 2)}
+    assert {frozenset(v) for v in by_day.values()} == {frozenset({"북1", "북2", "북식당"}), frozenset({"남1", "남2", "남식당"})}
+
+
+def test_regroup_days_keeps_plan_when_already_grouped():
+    places = [_p("북1", day=1, lat=37.90), _p("북2", day=1, lat=37.91), _p("남1", day=2, lat=37.70), _p("남2", day=2, lat=37.71)]
+    assert nodes._regroup_days(places, 2) == places
+
+
+def test_best_order_starts_from_previous_lodging():
+    stay = _p("숙소", "숙소", lat=37.60)
+    places = [_p("먼곳", lat=37.90), _p("중간", lat=37.75), _p("가까운곳", lat=37.61)]
+    assert [p["name"] for p in nodes._best_order(places, start=stay)] == ["가까운곳", "중간", "먼곳"]
+
+
+def test_user_lodging_is_used_every_night(fake_verify):
+    cands = [_p("A", day=1), _p("LLM호텔", "숙소", day=1), _p("B", day=2), _p("C", day=3)]
+    mine = {"name": "내숙소", "lat": 37.55, "lng": 127.05, "kakao_place_id": "mine", "address": ""}
+    out = nodes.verify_places(_state(cands, user_stay=mine, request={"transport": "car", "mode": "trip", "days": 3, "lodging": "내숙소"}))
+    stays = [(p["day"], p["name"]) for p in out["verified"] if p["category"] == "숙소"]
+    assert stays == [(1, "내숙소"), (2, "내숙소")]  # 초안의 숙소 대신 사용자가 적은 숙소, 마지막 날은 없음
+
+
+def test_must_have_place_is_inserted_when_draft_skipped_it(fake_verify):
+    cands = [_p("A", order=1), _p("B", "식당", order=2), _p("C", "카페", order=3), _p("D", order=4)]
+    must = [{"name": "반지공방 온", "lat": 37.5447, "lng": 127.0561, "kakao_place_id": "ring", "address": "", "keyword": "반지공방", "category_full": "문화,예술 > 공방"}]
+    out = nodes.verify_places(_state(cands, must_docs=must, must_keywords=["반지공방"]))
+    names = [p["name"] for p in out["verified"]]
+    assert "반지공방 온" in names and len(names) == 4  # 볼거리 한 자리와 바꿔 넣는다 (식당·카페는 유지)
+    assert {"B", "C"} <= set(names)
+
+
+def test_must_have_not_duplicated_when_draft_already_has_it(fake_verify):
+    cands = [_p("A"), _p("B", "식당"), _p("성수 반지공방", kakao_category="문화,예술 > 공방")]
+    must = [{"name": "다른 반지공방", "lat": 37.5447, "lng": 127.0561, "kakao_place_id": "ring2", "address": "", "keyword": "반지공방"}]
+    out = nodes.verify_places(_state(cands, must_docs=must, must_keywords=["반지공방"]))
+    assert [p["name"] for p in out["verified"]] == ["A", "B", "성수 반지공방"]
+
+
+def test_budget_warning_uses_estimated_costs(fake_verify):
+    cands = [_p("A", est_cost=40000), _p("B", "식당", est_cost=50000), _p("C", "카페", est_cost=20000)]
+    out = nodes.verify_places(_state(cands, request={"budget": 100000}))
+    assert any("예산" in w for w in out["warnings"])
+
+
+def test_regroup_gives_every_day_a_restaurant():
+    # 식당 3곳이 전부 남쪽에 있어도 날마다 하나씩은 돌아가게
+    places = [
+        _p("북1", day=1, lat=37.90), _p("북2", day=1, lat=37.91), _p("남1", day=2, lat=37.70), _p("남2", day=2, lat=37.71),
+        _p("남식당1", "식당", day=1, lat=37.70), _p("남식당2", "식당", day=1, lat=37.705), _p("북1b", day=2, lat=37.905),
+        _p("남1b", day=1, lat=37.715),
+    ]
+    out = nodes._regroup_days(places, 2)
+    for d in (1, 2):
+        assert any(p["category"] == "식당" for p in out if p["day"] == d)
+
+
+def test_day_sequence_follows_time_of_day():
+    ps = [_p("저녁식당", "식당", lat=37.56), _p("볼거리1", lat=37.50), _p("카페", "카페", lat=37.52), _p("점심식당", "식당", lat=37.505), _p("볼거리2", lat=37.54)]
+    cats = [p["category"] for p in nodes._day_sequence(ps)]
+    assert cats == ["관광지", "식당", "카페", "관광지", "식당"]  # 오전 볼거리 → 점심 → 카페 → 오후 볼거리 → 저녁
+
+
+def test_outdoor_detected_by_name_even_if_flagged_indoor():
+    assert nodes._is_outdoor(_p("송도센트럴파크", "놀거리", indoor=True))
+    assert nodes._is_outdoor(_p("아침고요수목원", indoor=True))
+    assert nodes._is_outdoor(_p("자라섬", "놀거리", indoor=True))
+    assert not nodes._is_outdoor(_p("인천도시역사관", indoor=True))
+    assert not nodes._is_outdoor(_p("서울숲 근처 식당", "식당", indoor=False))
+
+
+def test_unverified_slots_are_filled_from_known_real_places(fake_verify):
+    cands = [
+        _p("A"), _p("B", "식당"),
+        {"name": "없는카페", "category": "카페", "day": 1, "order": 3, "verified": False},
+        {"name": "없는전시", "category": "관광지", "day": 1, "order": 4, "verified": False},
+    ]
+    pois = [{"name": "실존카페", "lat": 37.5446, "lng": 127.0561, "kakao_place_id": "c1", "category_group": "CE7", "address": ""}]
+    rag = [
+        {"doc_type": "place", "title": "실존박물관", "lat": 37.5448, "lng": 127.0562, "addr": "", "one_line": "실내 전시"},
+        {"doc_type": "place", "title": "한강공원", "lat": 37.5447, "lng": 127.0561, "addr": ""},  # 비 예보 → 야외는 제외
+    ]
+    out = nodes.verify_places(_state(cands, poi_docs=pois, rag_docs=rag, weather={"rain": True}, request={"transport": "car"}))
+    assert [p["name"] for p in out["verified"]] == ["A", "B", "실존카페", "실존박물관"]

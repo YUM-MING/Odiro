@@ -344,6 +344,12 @@ export default function Plan() {
                                       {p.arrive && <span className="pc-time"><I.Clock size={12} /> {p.arrive} · {p.stay_min}분</span>}
                                     </span>
                                     {p.reason && <span className="pc-reason">{p.reason}</span>}
+                                    {(!!p.est_cost || !!p.parking) && (
+                                      <span className="pc-extra">
+                                        {!!p.est_cost && <span>1인 약 {p.est_cost.toLocaleString('ko-KR')}원</span>}
+                                        {!!p.parking && <span>주차 {p.parking}</span>}
+                                      </span>
+                                    )}
                                     {p.tags.length > 0 && (
                                       <span className="chips">
                                         {p.tags.map((t) => (

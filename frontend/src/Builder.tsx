@@ -108,6 +108,20 @@ export default function Builder({ value, onChange, moods, onSubmit, submitLabel 
             </select>
           )}
         </label>
+        {value.mode === 'trip' && (
+          <label className="field">
+            <span className="field-icon"><I.Pin /></span>
+            <input
+              className="field-input"
+              placeholder="숙소를 정했다면 이름 (선택, 비우면 추천)"
+              value={value.lodging ?? ''}
+              maxLength={80}
+              onChange={(e) => set('lodging', e.target.value)}
+              aria-label="숙소"
+              autoComplete="off"
+            />
+          </label>
+        )}
         <div className="field field-seg" role="radiogroup" aria-label="교통수단">
           <span className="field-icon">{value.transport === 'car' ? <I.Car /> : <I.Walk />}</span>
           <button

@@ -40,6 +40,7 @@ class CourseRequest(BaseModel):
     moods: list[str] = Field(default_factory=list, description="MOODS 중 다중 선택")
     free_text: str = Field("", max_length=300, description="자유 조건. 예) 비건 메뉴 꼭 포함")
     party: str = Field("", description="동행. 예) 연인, 가족(아이 2), 친구")
+    lodging: str = Field("", max_length=80, description="여행 모드: 이미 정한 숙소 이름 (선택). 비우면 에이전트가 고른다")
 
 
 class PlaceOut(BaseModel):
@@ -61,6 +62,8 @@ class PlaceOut(BaseModel):
     image: str = ""
     verified: bool = True  # 지도 API 로 실존 확인됨 (false 인 장소는 절대 지도에 올리지 않음)
     source: str = ""  # rag / web / llm
+    est_cost: int = 0  # 1인 예상 비용(원). LLM 추정치 — 화면에는 "약" 으로 표시
+    parking: str = ""  # 자차: 가장 가까운 주차장 "이름 (약 120m)". 카카오 지도 기준, 없으면 빈 문자열
 
 
 class LegOut(BaseModel):
@@ -100,6 +103,7 @@ class CourseMeta(BaseModel):
     rag_docs: int = 0
     web_docs: int = 0
     warnings: list[str] = Field(default_factory=list)
+    est_cost_total: int = 0  # 1인 예상 비용 합계 (숙박비 제외, 추정)
     trace: list[TraceStep] = Field(default_factory=list)
     cached: bool = False
     elapsed_ms: int = 0

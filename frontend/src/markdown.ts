@@ -54,7 +54,7 @@ export function renderMarkdown(md: string): string {
       html.push(`<blockquote>${inline(q[1])}</blockquote>`)
       continue
     }
-    const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line)
+    const ol = /^\s*(\d+)[.)]\s+(.*)$/.exec(line)
     const ul = /^\s*[-*•]\s+(.*)$/.exec(line)
     if (ol || ul) {
       flushPara()
@@ -64,7 +64,8 @@ export function renderMarkdown(md: string): string {
         html.push(`<${kind}>`)
         list = kind
       }
-      html.push(`<li>${inline((ol ?? ul)![1])}</li>`)
+      // 번호 목록은 항목 사이에 이동 안내(↳) 줄이 끼면 목록이 끊겨 전부 1 로 보인다 → 원문 번호를 그대로 쓴다
+      html.push(ol ? `<li value="${Number(ol[1])}">${inline(ol[2])}</li>` : `<li>${inline(ul![1])}</li>`)
       continue
     }
     closeList()

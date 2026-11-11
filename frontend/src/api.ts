@@ -50,6 +50,7 @@ export interface CourseRequest {
   moods: string[]
   free_text: string
   party: string
+  lodging?: string // 여행 모드: 이미 정한 숙소 이름 (선택)
 }
 
 export interface PlaceOut {
@@ -71,6 +72,8 @@ export interface PlaceOut {
   image: string
   verified: boolean
   source: string
+  est_cost?: number // 1인 예상 비용(원), 추정
+  parking?: string // 자차: 가장 가까운 주차장
 }
 
 export interface LegOut {
@@ -112,6 +115,7 @@ export interface CourseMeta {
   rag_docs: number
   web_docs: number
   warnings: string[]
+  est_cost_total?: number // 1인 예상 비용 합계 (숙박비 제외, 추정)
   trace: TraceStep[]
   cached: boolean
   elapsed_ms: number

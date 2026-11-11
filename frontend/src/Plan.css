@@ -207,6 +207,7 @@
 .pc-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
 .pc-time { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); }
 .pc-reason { color: var(--ink-soft); font-size: 13px; }
+.pc-extra { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-soft); font-size: 12px; }
 .pc-edit {
   flex: none;
   display: inline-flex; align-items: center; gap: 3px;

@@ -63,6 +63,7 @@ def _to_response(state: dict[str, Any], req: CourseRequest, elapsed_ms: int, cac
             place_url=p.get("place_url", ""), phone=p.get("phone", ""), reason=p.get("reason", ""),
             tags=p.get("tags") or [], review_summary=p.get("review_summary", ""), arrive=p.get("arrive", ""),
             stay_min=int(p.get("stay_min", 60)), image=p.get("image", ""), verified=True, source=p.get("source", ""),
+            est_cost=int(p.get("est_cost") or 0), parking=p.get("parking", ""),
         )
         for p in state.get("places", [])
         if p.get("verified")
@@ -79,6 +80,7 @@ def _to_response(state: dict[str, Any], req: CourseRequest, elapsed_ms: int, cac
         rag_docs=len(state.get("rag_docs", [])),
         web_docs=len(state.get("web_docs", [])),
         warnings=list(dict.fromkeys(state.get("warnings", []))),
+        est_cost_total=sum(p.est_cost for p in places if p.category != "숙소"),
         trace=[TraceStep(**t) for t in state.get("trace", [])],
         cached=cached,
         elapsed_ms=elapsed_ms,

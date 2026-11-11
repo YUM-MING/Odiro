@@ -63,6 +63,9 @@ class CourseState(TypedDict, total=False):
     web_docs: list[dict[str, Any]]
     poi_docs: list[dict[str, Any]]  # 중심 주변 실존 식당·카페 (카카오)
     stay_docs: list[dict[str, Any]]  # 여행 모드: 주변 실존 숙소 (카카오)
+    must_docs: list[dict[str, Any]]  # 자유 조건이 가리키는 장소 종류(예: 반지공방)의 실존 후보 (카카오). 각 항목에 keyword
+    must_keywords: list[str]
+    user_stay: dict[str, Any] | None  # 사용자가 직접 적은 숙소 (지도 확인됨)
     weather: dict[str, Any]
     sun_times: dict[str, str]
 
