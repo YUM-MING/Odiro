@@ -77,7 +77,7 @@ python -m odiro.tools.rag_search "성수동 조용한 카페 데이트"   # 검�
 
 ```bash
 gcloud run deploy odiro-api --source . --region asia-northeast3 --project odiro-where \
-  --min-instances 0 --max-instances 1 --memory 2Gi --timeout 120 --allow-unauthenticated   # 2Gi 는 코스 생성 중 메모리 초과가 잦다 (HANDOVER 3번). 4Gi 는 과금 문제로 보류
+  --min-instances 0 --max-instances 1 --memory 4Gi --timeout 120 --allow-unauthenticated   # 2Gi 는 코스 생성 중 메모리 초과로 인스턴스가 죽는다 (HANDOVER 3번)
 cd frontend && VITE_API_URL=https://odiro-api-80160454962.asia-northeast3.run.app npm run build \
   && firebase deploy --only hosting --project odiro-where
 ```
