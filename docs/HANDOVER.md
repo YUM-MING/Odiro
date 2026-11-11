@@ -66,18 +66,19 @@
 
 ### 3. 못 한 것 / 미뤄진 것
 - [x] ~~배포 활성화~~ — 자동 배포는 **이미 켜져 있었다** (0주차가 `setup_ci.sh` 는 실행했고 워크플로 파일만 안 올렸던 것). 11/11 부터 `main` push 마다 Cloud Run + Hosting 배포가 돈다 (https://github.com/YUM-MING/Odiro/actions). 벡터 DB 는 `gs://odiro-where-data/vectorstore.tgz` + Variable `VECTORSTORE_GCS_URI` 로 이미지에 포함.
-- [ ] **Cloud Run 환경변수(API 키)** — `python scripts/push_env_to_cloudrun.py` 1회 (gcloud 로그인 필요). 이게 비어 있으면 사이트의 `/api/config-check` 가 `ready:false` 이고 코스 생성이 503. 키를 바꾸면 다시 실행.
-- [ ] **Kakao 콘솔 Web 도메인 등록** — `http://localhost:5173`, `https://odiro-where.web.app`. 안 하면 지도 SDK 가 "domain mismatched" 로 거부돼 지도 패널만 비어 보인다 (코스 생성 자체는 됨).
+- [x] **Cloud Run 환경변수(API 키)** — 11/11 등록 완료 (`/api/config-check` → `ready:true`). 키를 바꾸면 `python scripts/push_env_to_cloudrun.py` 재실행 (gcloud 로그인 필요). 비어 있으면 사이트의 `/api/config-check` 가 `ready:false` 이고 코스 생성이 503. 키를 바꾸면 다시 실행.
+- [x] **Kakao 도메인 등록** — 11/11 완료, 배포 사이트에서 지도 표시 확인. 콘솔 메뉴는 "플랫폼 → Web" 이 아니라 **JavaScript SDK 도메인** (`http://localhost:5173`, `https://odiro-where.web.app`). 안 하면 지도 SDK 가 "domain mismatched" 로 거부돼 지도 패널만 비어 보인다 (코스 생성 자체는 됨).
+- [ ] **⚠ 배포 서버 메모리 초과 (가장 급함)** — 11/11 라이브에서 코스 생성을 순서대로 5회 호출했더니 4회가 중간에 끊겼다 (성수동·가평 각 2회 실패, 인천 송도 1회 성공). Cloud Run 로그에 매번 `Memory limit of 2048 MiB exceeded` + 인스턴스 강제 종료. 동시 요청 3개는 전부 실패. 끊길 때 서버는 error 이벤트 없이 SSE 만 닫는다(프론트 표시는 미확인). 로컬 측정으로 벡터 검색만 약 1.1GB 를 잡는다. `get_vectorstore()` 를 캐시해도 메모리는 같았다(원인 아님). **해결안**: (1) `deploy.yml` 의 `--memory 2Gi` → `4Gi` 한 줄 — 가장 확실하지만 과금이 늘어 1주차에서는 **보류** (4Gi 배포는 시도 직후 취소, 라이브는 2Gi) (2) 과금 없이 하려면 인덱스를 줄이기(블로그 청크 수 축소, 임베딩 차원 축소) 또는 시연 3개 시나리오를 `scripts/warm_demo_cache.py` 캐시로만 응답. 확인: `gcloud logging read 'resource.labels.service_name="odiro-api" AND severity>=WARNING' --limit 20`
 - [ ] **TourAPI 상세(overview)** — 개발계정 기능별 일 1,000건이라 서울 999건만. 매일 `python -m odiro.data.ingest.tour_api --no-meta` 한 번씩 (인천·경기 관광지/문화시설 우선). **운영계정 전환 신청**은 호출 이력이 생겼으니 지금 넣을 것 (data.go.kr → 해당 API → 변경 신청, 활용 URL 에 https://odiro-where.web.app)
 - [ ] **나머지 14개 시도** (D6~D8) — `tour_api --all`, `naver_blog --all`, `labeling --all`, `build_index --all` 순서. 블로그 라벨링 비용은 1만 건당 약 1달러
-- [ ] **품질** — 아직 손볼 곳: (a) 자차 모드 반경 30km 라 "송도" 요청에 계양구 장소가 섞임 → 동 단위 요청이면 반경 10km 로 줄이기 (b) 리뷰 요약이 '정보 부족' 으로 비는 비율 30~50% (c) 체류 시간이 LLM 기본값 60분으로 몰림 (d) 여행 모드 숙소 배치가 불안정 (e) 응답 시간 30~45초 → draft/compose 를 더 빠른 모델로 분리하거나 compose 를 스트리밍
-- [ ] **프론트 실브라우저 검증** — 코드 리뷰·빌드만 했고 실제 브라우저에서 카카오맵 핀·SSE 를 끝까지 눌러보는 건 다음 담당자가 로컬에서 꼭 한 번 (`npm run dev` + 백엔드)
+- [ ] **품질** — 아직 손볼 곳: (a) 자차 모드 반경 30km 라 "송도" 요청에 계양구 장소가 섞임 → 동 단위 요청이면 반경 10km 로 줄이기 (b) 리뷰 요약이 '정보 부족' 으로 비는 비율 30~50% (c) 체류 시간이 LLM 기본값 60분으로 몰림 (d) 여행 모드 숙소 배치가 불안정 (e) 응답 시간 30~45초 → draft/compose 를 더 빠른 모델로 분리하거나 compose 를 스트리밍 (f) 수정 요청 "마지막 장소를 실내 놀이공간으로" 에 진행 표시는 "키즈카페 송도" 인데 실제 결과는 "송도카페거리" 로 들어감 (g) 비 예보(강수 100%)인데 야외인 송도센트럴파크가 "실내 공간" 으로 요약됨 (h) 수정 응답에서 날씨가 `available:false`·기온 없음으로 바뀜
+- [ ] **프론트 실브라우저 검증** — 11/11 YUM-MING 이 배포 사이트에서 코스 생성·지도 표시까지 눌러 봄(정상). 로컬(`npm run dev` + 백엔드)과 서버가 끊겼을 때의 화면은 다음 담당자가 한 번 확인
 - [ ] 발표용 그래프 이미지: `python -m odiro.agent.graph` 출력(Mermaid)을 https://mermaid.live 에서 PNG 로
 
 ### 4. 다음 담당자가 첫날 해야 할 것 (순서대로)
 1. 이 문서 → `README.md` → `docs/API_SCHEMA.md` 읽기. `.env` 는 메신저 비공개 노트에서, 벡터 DB tgz 는 6번 Drive 링크에서 받아 `data/` 에 풀기
 2. 로컬 세팅 후 `pytest`, `python scripts/check_apis.py`, `python -m odiro.agent.run "성수동"` 이 되는지 확인. 프론트 `npm run dev` 로 `/plan` 까지 눌러보기
-3. **배포 활성화 4가지** (3번 첫 항목). 끝나면 push 한 번으로 사이트가 바뀐다
+3. 배포는 이미 켜져 있다 (`main` push → 자동 배포, API 키·카카오 도메인 등록 완료). **3번의 "배포 서버 메모리 초과" 부터 해결**할 것
 4. `tour_api --no-meta` 하루 1회 돌리기 시작 + 운영계정 전환 신청
 5. 역할 재조정 (TEAM_ROLES.md 에 반영함): **2주차 = 전국 데이터 확장 + 에이전트 품질(위 3번 '품질' 항목) + 테스트**, **3주차 = UI 다듬기 + 안정화·시연 영상**
 
@@ -96,7 +97,7 @@
 ### 6. 자원 위치
 | 항목 | 위치 |
 |---|---|
-| 서비스 | https://odiro-where.web.app (배포 활성화 전까지 0주차 랜딩) |
+| 서비스 | https://odiro-where.web.app (플래너 배포됨. 백엔드 메모리 초과 문제는 3번 참고) |
 | 백엔드 직접 URL | https://odiro-api-80160454962.asia-northeast3.run.app |
 | GitHub | https://github.com/YUM-MING/Odiro (`main` 직접 작업) |
 | 데이터 tgz | 벡터 DB: `gs://odiro-where-data/vectorstore.tgz` (GCP 콘솔 Storage 에서 다운로드, 약 600MB) · 원본+상태: `odiro-data-20261111.tgz` → **Drive 링크: (업로드 후 기입)**. 로컬 복원: `tar xzf vectorstore.tgz -C data/` |
