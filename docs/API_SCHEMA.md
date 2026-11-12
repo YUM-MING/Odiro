@@ -9,8 +9,9 @@
 |---|---|---|
 | GET | `/api/health` | 헬스체크 `{status, version}` |
 | GET | `/api/public-config` | `{kakao_js_api_key}` — 프론트 지도 SDK 로드용 |
+| GET | `/api/config-check` | `{ready, missing[]}` — 비어 있는 API 키 이름 (값은 노출하지 않음) |
 | GET | `/api/moods` | 분위기 태그 목록 `{moods: string[]}` |
-| POST | `/api/course` | **동기** 코스 생성. 본문 `CourseRequest` → `CourseResponse` (최대 ~40초) |
+| POST | `/api/course` | **동기** 코스 생성. 본문 `CourseRequest` → `CourseResponse` (90초 넘으면 503) |
 | POST | `/api/course/start` | **비동기** 시작. 본문 `CourseRequest` → `{job_id, stream_url}` |
 | GET | `/api/course/stream/{job_id}` | SSE. `progress` 이벤트(노드 진행) 여러 번 → `result` 1번 (또는 `error`) |
 | POST | `/api/course/edit` | 수정 플라이휠. 본문 `EditRequest` → `CourseResponse` (바뀐 장소만 재검증·재동선) |
@@ -29,10 +30,11 @@
   "start_time": "11:00",
   "end_time": "20:00",
   "days": 1,                   // trip 이면 1~3
-  "budget": 100000,            // 1인 예산(원)
+  "budget": 100000,            // 1인 예산(원). 나들이는 하루 합계, 여행은 전체 일정 합계(숙박비 제외). 0 이면 무관
   "moods": ["감성/조용한", "사진맛집"],
-  "free_text": "비건 메뉴 있는 식당 하나는 꼭",
-  "party": "연인"
+  "free_text": "비건 메뉴 있는 식당 하나는 꼭",   // 장소 종류를 가리키면(반지공방, 라구파스타 …) 그 종류의 실존 장소가 코스 전체에 한 번 들어간다
+  "party": "연인",
+  "lodging": ""                // (선택) 여행 모드에서 이미 정한 숙소 이름. 지도에서 확인되면 마지막 날을 뺀 매일의 끝 장소가 된다
 }
 ```
 
@@ -55,7 +57,9 @@
       "tags": ["자연/산책", "사진맛집"],
       "review_summary": "평일 오후엔 한산하고 가을 단풍이 예쁘다는 평",
       "arrive": "11:00", "stay_min": 70,
-      "image": "https://…", "verified": true, "source": "rag"
+      "image": "https://…", "verified": true, "source": "rag",
+      "est_cost": 0,              // 1인 예상 비용(원). LLM 추정치 → 화면에는 "약" 으로. 0 이면 무료이거나 모름
+      "parking": ""               // 자차 모드: 400m 안 가장 가까운 주차장 "이름 (약 120m)". 없으면 빈 문자열
     }
   ],
   "legs": [
@@ -68,6 +72,7 @@
     "weather": { "available": true, "summary": "맑음", "temp_c": 9.5, "pop": 0.1, "rain": false, "note": "" },
     "rag_docs": 8, "web_docs": 3,
     "warnings": ["3→4 구간은 길찾기 실패로 직선거리 추정"],
+    "est_cost_total": 45000,      // 1인 예상 비용 합계 (숙박비 제외, 추정). 예산을 넘으면 warnings 에 안내
     "trace": [ { "node": "parse_intent", "status": "done", "ms": 1200, "detail": "" }, … ],
     "cached": false, "elapsed_ms": 23400
   }
@@ -79,7 +84,9 @@
 - `verified == false` 인 장소는 응답에 포함하지 않는다 (백엔드가 보장). 프론트는 그래도 `verified` 를 확인하고 지도에 올린다.
 - `legs[].transport`: 뚜벅이 모드에서 도보 2.5km 초과 구간은 `transit` 로 표시되고 시간은 추정값(`estimated: true`).
 - `meta.weather.rain == true` 면 프론트는 "비 예보 → 실내 위주로 구성" 배지를 보여준다. 코스 자체는 이미 실내 가중치로 생성됨.
-- `answer_md` 의 첫 줄은 항상 `**Odiro:**` 로 시작.
+- `answer_md` 의 첫 줄은 항상 `**Odiro:**` 로 시작. 장소는 번호 목록(`1. **장소명** (도착 HH:MM · 체류 N분 · 약 N원) — 이유`), 이동은 `↳` 줄. 여행은 Day 마다 번호가 1부터 다시 시작한다.
+- `category` 는 `식당 / 카페 / 관광지 / 놀거리 / 산책 / 쇼핑 / 숙소 / 기타`. 프론트는 밥집·카페·놀거리(그 외)·숙소 네 가지 색으로 나눈다. 여행 모드에서 마지막 날을 뺀 각 Day 의 마지막 장소는 `숙소`.
+- 수정 응답의 `answer_md` 는 첫 줄에 `_무엇을 무엇으로 바꿨는지_` 가 붙는다. 요청한 장소를 지도에서 못 찾으면 같은 역할의 근처 장소로 바꾸고 그 사실을 적는다.
 
 ## EditRequest
 
@@ -93,6 +100,7 @@
 ```
 
 응답은 `CourseResponse`. `course_id` 는 새로 발급, `meta.trace` 는 `modify → verify_places → optimize_route → enrich → compose_answer` 만 포함.
+`instruction` 에 "3번째", "마지막", "2일차 첫 번째" 같은 순서 표현이 하나만 있으면 `target_order` 없이도 서버가 대상을 확정한다.
 
 ## SSE (`GET /api/course/stream/{job_id}`)
 
@@ -118,11 +126,3 @@ data: { …CourseResponse… }
 - 400: 요청 스키마 오류 (FastAPI 기본 422 도 동일 취급)
 - 404: 없는 job_id
 - 503: LLM/필수 API 전부 실패 (`{"detail": "..."}`). 프론트는 "잠시 후 다시" 안내.
-
-## 11/11 추가 필드
-
-- `CourseRequest.lodging` (string, 선택): 여행 모드에서 이미 정한 숙소 이름. 지도에서 확인되면 마지막 날을 뺀 매일의 끝 장소가 된다. 비우면 에이전트가 고른다.
-- `PlaceOut.est_cost` (int): 1인 예상 비용(원). LLM 추정치라 화면에는 "약" 으로 표시. 0 이면 무료이거나 모름.
-- `PlaceOut.parking` (string): 자차 모드에서 400m 안 가장 가까운 주차장 "이름 (약 120m)". 카카오 지도 기준, 없으면 빈 문자열.
-- `CourseMeta.est_cost_total` (int): 1인 예상 비용 합계 (숙박비 제외, 추정). 예산을 넘으면 `warnings` 에 안내가 들어간다.
-- `free_text` 가 장소 종류를 가리키면(예: "반지공방") 그 종류의 실존 장소 1곳이 반드시 코스에 들어간다.
