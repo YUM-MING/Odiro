@@ -176,6 +176,7 @@ export default function Builder({ value, onChange, moods, onSubmit, submitLabel 
           <label className="more-field">
             <span>
               1인 예산 <strong>{formatBudget(value.budget)}</strong>
+              <small className="muted"> {value.mode === 'trip' ? `· ${value.days}일 전체 합계 (숙박비 제외)` : '· 하루 합계'}</small>
             </span>
             <input
               type="range"

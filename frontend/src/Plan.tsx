@@ -19,7 +19,7 @@ import {
 import Builder from './Builder'
 import * as I from './Icons'
 import MapView from './MapView'
-import { DAY_COLORS, kakaoToLink } from './mapUtil'
+import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoReviewLink, kakaoRouteLink, kakaoToLink, kindColor, placeKind, type Kind } from './mapUtil'
 import { renderMarkdown } from './markdown'
 import { EDIT_NODES, GENERATE_NODES, MOCK_ENABLED, mockCourse, mockEdit, simulateProgress } from './mock'
 import Progress from './Progress'
@@ -297,6 +297,16 @@ export default function Plan() {
                 </span>
               )}
               {course.meta.weather.rain && <span className="badge-rain">비 예보 → 실내 위주</span>}
+              {!!course.meta.est_cost_total && (
+                <span
+                  className={course.request.budget > 0 && course.meta.est_cost_total > course.request.budget ? 'over' : ''}
+                  title="장소별 1인 예상 비용의 합계 (추정치, 숙박비 제외)"
+                >
+                  1인 예상 약 {course.meta.est_cost_total.toLocaleString('ko-KR')}원
+                  {course.request.budget > 0 &&
+                    ` / 예산 ${course.request.budget.toLocaleString('ko-KR')}원${course.request.mode === 'trip' ? ` (${course.request.days}일 합계)` : ''}`}
+                </span>
+              )}
               <span className="muted">RAG {course.meta.rag_docs} · 웹 {course.meta.web_docs}{course.meta.cached ? ' · 캐시' : ''}</span>
             </div>
           )}
@@ -319,13 +329,29 @@ export default function Plan() {
                     <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
                     {m.course && m.course.course_id === course?.course_id && (
                       <div className="places">
+                        <div className="legend" aria-label="색 구분">
+                          {(Object.keys(KIND_COLOR) as Kind[])
+                            .filter((k) => course.places.some((p) => placeKind(p.category) === k))
+                            .map((k) => (
+                              <span key={k}><i style={{ background: KIND_COLOR[k] }} />{KIND_LABEL[k]}</span>
+                            ))}
+                        </div>
                         {byDay.map(([day, idxs]) => (
                           <div key={day}>
-                            {course.request.mode === 'trip' && (
-                              <div className="day-label" style={{ color: DAY_COLORS[(day - 1) % DAY_COLORS.length] }}>
-                                Day {day}
-                              </div>
-                            )}
+                            <div className="day-label" style={{ color: DAY_COLORS[(day - 1) % DAY_COLORS.length] }}>
+                              {course.request.mode === 'trip' && <span>Day {day}</span>}
+                              {idxs.length >= 2 && (
+                                <a
+                                  className="nav-link"
+                                  href={kakaoRouteLink(idxs.map((i) => course.places[i]), course.request.transport === 'car' ? 'car' : 'walk')}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="이 날의 장소를 순서대로 잇는 경로를 카카오맵에서 엽니다 (앱에서 내비 시작 가능)"
+                                >
+                                  {course.request.transport === 'car' ? '🚗 내비로 전체 경로 열기' : '🚶 도보 경로 열기'}
+                                </a>
+                              )}
+                            </div>
                             {idxs.map((i) => {
                               const p = course.places[i]
                               return (
@@ -334,13 +360,13 @@ export default function Plan() {
                                   className={`place-card${selected === i ? ' selected' : ''}`}
                                   onClick={() => setSelected(i)}
                                 >
-                                  <span className="pc-order" style={{ background: DAY_COLORS[(p.day - 1) % DAY_COLORS.length] }}>
+                                  <span className="pc-order" style={{ background: kindColor(p) }}>
                                     {p.order}
                                   </span>
                                   <span className="pc-body">
                                     <span className="pc-title">
                                       <strong>{p.name}</strong>
-                                      <span className="muted"> {p.category}</span>
+                                      <span className="pc-kind" style={{ color: kindColor(p) }}> {p.category}</span>
                                       {p.arrive && <span className="pc-time"><I.Clock size={12} /> {p.arrive} · {p.stay_min}분</span>}
                                     </span>
                                     {p.reason && <span className="pc-reason">{p.reason}</span>}
@@ -350,6 +376,7 @@ export default function Plan() {
                                         {!!p.parking && <span>주차 {p.parking}</span>}
                                       </span>
                                     )}
+                                    {p.review_summary && <span className="pc-review">💬 {p.review_summary}</span>}
                                     {p.tags.length > 0 && (
                                       <span className="chips">
                                         {p.tags.map((t) => (
@@ -357,6 +384,31 @@ export default function Plan() {
                                         ))}
                                       </span>
                                     )}
+                                    <span className="pc-links">
+                                      {[
+                                        { label: '리뷰 보기', href: kakaoReviewLink(p) },
+                                        { label: course.request.transport === 'car' ? '내비·길찾기' : '길찾기', href: kakaoToLink(p) },
+                                      ].map((l) => (
+                                        <span
+                                          key={l.label}
+                                          className="pc-link"
+                                          role="link"
+                                          tabIndex={0}
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            window.open(l.href, '_blank', 'noopener,noreferrer')
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.stopPropagation()
+                                              window.open(l.href, '_blank', 'noopener,noreferrer')
+                                            }
+                                          }}
+                                        >
+                                          {l.label} ↗
+                                        </span>
+                                      ))}
+                                    </span>
                                   </span>
                                   <span
                                     className="pc-edit"

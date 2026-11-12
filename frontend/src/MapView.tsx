@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { LegOut, PlaceOut } from './api'
 import * as I from './Icons'
-import { DAY_COLORS, kakaoToLink } from './mapUtil'
+import { DAY_COLORS, kakaoReviewLink, kakaoToLink, kindColor } from './mapUtil'
 
 let sdkPromise: Promise<void> | null = null
 function loadSdk(key: string): Promise<void> {
@@ -79,7 +79,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
       const el = document.createElement('button')
       el.type = 'button'
       el.className = `pin${selected === idx ? ' selected' : ''}`
-      el.style.setProperty('--pin', DAY_COLORS[(p.day - 1) % DAY_COLORS.length])
+      el.style.setProperty('--pin', kindColor(p)) // 핀은 종류별 색(밥집·카페·놀거리·숙소), 동선은 Day 별 색
       el.setAttribute('aria-label', `${p.order}번 ${p.name}`)
       el.textContent = String(p.order)
       el.addEventListener('click', () => onSelect(idx))
@@ -140,7 +140,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
             <I.Close size={16} />
           </button>
           <div className="popup-head">
-            <span className="popup-order" style={{ background: DAY_COLORS[(sel.day - 1) % DAY_COLORS.length] }}>
+            <span className="popup-order" style={{ background: kindColor(sel) }}>
               {sel.order}
             </span>
             <div>
@@ -163,9 +163,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
             </div>
           )}
           <div className="popup-links">
-            {sel.place_url && (
-              <a href={sel.place_url} target="_blank" rel="noopener noreferrer">카카오맵 상세</a>
-            )}
+            <a href={kakaoReviewLink(sel)} target="_blank" rel="noopener noreferrer">리뷰 보기</a>
             <a href={kakaoToLink(sel)} target="_blank" rel="noopener noreferrer">길찾기</a>
             {sel.phone && <a href={`tel:${sel.phone}`}>{sel.phone}</a>}
           </div>

@@ -72,7 +72,14 @@
 
 /* ---------- 진행 상태 ---------- */
 .progress { padding: 14px 18px 8px; }
-.progress-head { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
+.progress-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 8px; }
+.progress-head strong { margin-right: auto; }
+.progress.collapsed { padding-bottom: 6px; }
+.progress.collapsed .progress-head { margin-bottom: 0; }
+.progress-toggle { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 2px 4px; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-soft); cursor: pointer; }
+.progress-toggle:hover { color: var(--coral); }
+.progress-toggle .chevron { width: 14px; height: 14px; transition: transform .15s; }
+.progress-toggle .chevron.up { transform: rotate(180deg); }
 .progress-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .step {
   display: grid;
@@ -184,7 +191,18 @@
 
 /* ---------- 장소 카드 ---------- */
 .places { margin-top: 10px; display: grid; gap: 8px; }
-.day-label { font-weight: 800; font-size: 13px; margin: 6px 0 2px; }
+.day-label { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 13px; margin: 6px 0 2px; }
+.nav-link { font-weight: 700; font-size: 12px; color: var(--ink-soft); padding: 3px 10px; border-radius: 999px; box-shadow: 0 0 0 1px var(--line); text-decoration: none; }
+.nav-link:hover { color: var(--coral); box-shadow: 0 0 0 1px var(--coral); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--ink-soft); margin-bottom: 2px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.pc-kind { font-weight: 700; font-size: 12.5px; }
+.pc-review { color: var(--ink-soft); font-size: 12.5px; }
+.pc-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.pc-link { font-size: 12px; font-weight: 700; color: var(--ink-soft); padding: 2px 9px; border-radius: 999px; box-shadow: 0 0 0 1px var(--line); cursor: pointer; }
+.pc-link:hover, .pc-link:focus-visible { color: var(--coral); box-shadow: 0 0 0 1px var(--coral); }
+.info-strip .over { color: #c92a2a; font-weight: 700; }
 .place-card {
   width: 100%;
   display: flex; gap: 10px; align-items: flex-start;

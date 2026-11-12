@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from odiro.agent import nodes
@@ -300,3 +302,70 @@ def test_attraction_comes_from_map_search_when_no_curated_place_docs(fake_verify
     cands = [_p("카페1", "카페"), _p("식당1", "식당"), _p("카페2", "카페")]
     out = nodes.verify_places(_state(cands, rag_docs=[{"doc_type": "blog", "title": "가평 카페 후기"}], request={"transport": "car"}))
     assert [p["name"] for p in out["verified"]] == ["카페1", "식당1", "가평레일파크"]
+
+
+# ---------- 11/12 피드백: 프랜차이즈 · 엉뚱한 추천 이유 · 꼭 넣을 곳 한 번만 ----------
+
+
+def test_is_chain():
+    assert nodes._is_chain("메가MGC커피 강릉시외버스터미널점")
+    assert nodes._is_chain("스타벅스 남이섬점")
+    assert not nodes._is_chain("카페서울숲")
+    assert not nodes._is_chain("강릉커피거리 보사노바")
+
+
+def test_chain_cafe_is_replaced(fake_verify):
+    cands = [_p("A"), _p("B", "식당"), _p("메가MGC커피 강릉시외버스터미널점", "카페", reason="호수 전망이 좋은 카페", tags=["뷰맛집/일몰"])]
+    pois = [
+        {"name": "스타벅스 강릉점", "lat": 37.5446, "lng": 127.0561, "kakao_place_id": "s1", "category_group": "CE7", "address": ""},
+        {"name": "동네로스터리", "lat": 37.5447, "lng": 127.0561, "kakao_place_id": "c1", "category_group": "CE7", "address": ""},
+    ]
+    out = nodes.verify_places(_state(cands, poi_docs=pois, request={"transport": "car", "region": "강릉"}))
+    cafe = out["verified"][2]
+    assert cafe["name"] == "동네로스터리"  # 프랜차이즈는 빼고, 채울 때도 프랜차이즈는 쓰지 않는다
+    assert "호수" not in cafe["reason"] and cafe["tags"] == []  # 실패한 후보의 설명·태그를 물려받지 않는다
+
+
+def test_chain_allowed_when_user_asks_for_it(fake_verify):
+    cands = [_p("A"), _p("B", "식당"), _p("스타벅스 강릉점", "카페")]
+    out = nodes.verify_places(_state(cands, request={"transport": "car", "free_text": "스타벅스 꼭 가고 싶어"}))
+    assert out["verified"][2]["name"] == "스타벅스 강릉점"
+
+
+def test_must_have_appears_only_once(fake_verify):
+    # 라구파스타를 Day 1, Day 2 에 모두 넣은 초안 → 한 번만 남기고 다른 식당으로
+    cands = [
+        _p("A", day=1), _p("라구파스타 온", "식당", day=1), _p("카페1", "카페", day=1),
+        _p("B", day=2), _p("파스타집 라구", "식당", day=2, kakao_category="음식점 > 양식 > 라구파스타"), _p("카페2", "카페", day=2),
+    ]
+    must = [{"name": "라구파스타 온", "lat": 37.5445, "lng": 127.0560, "kakao_place_id": "라구파스타 온", "keyword": "라구파스타", "category_group": "FD6"}]
+    pois = [{"name": "막국수집", "lat": 37.5446, "lng": 127.0561, "kakao_place_id": "m1", "category_group": "FD6", "address": ""}]
+    out = nodes.verify_places(_state(cands, must_docs=must, must_keywords=["라구파스타"], poi_docs=pois, request={"transport": "car", "mode": "outing"}))
+    names = [p["name"] for p in out["verified"]]
+    assert names.count("라구파스타 온") == 1 and "파스타집 라구" not in names and "막국수집" in names
+
+
+def test_must_have_restaurant_replaces_a_restaurant_slot(fake_verify):
+    cands = [_p("A"), _p("닭갈비집", "식당"), _p("카페1", "카페"), _p("B")]
+    must = [{"name": "라구파스타 온", "lat": 37.5446, "lng": 127.0561, "kakao_place_id": "r1", "keyword": "라구파스타", "category_group": "FD6"}]
+    out = nodes.verify_places(_state(cands, must_docs=must, must_keywords=["라구파스타"], request={"transport": "car"}))
+    got = {p["name"]: p["category"] for p in out["verified"]}
+    assert got == {"A": "관광지", "라구파스타 온": "식당", "카페1": "카페", "B": "관광지"}  # 볼거리가 아니라 식당 자리와 바꾼다
+
+
+def test_too_many_restaurants_in_a_day_are_rebalanced(fake_verify, monkeypatch):
+    found = [{"doc_type": "place", "title": "올림픽뮤지엄", "lat": 37.5449, "lng": 127.0562, "addr": "", "kakao_place_id": "k1", "place_url": "", "one_line": "박물관"}]
+    monkeypatch.setattr(nodes, "_find_attractions", lambda req, hub, rain: found)
+    cands = [_p("카페1", "카페"), _p("박물관A"), _p("빵집", "식당"), _p("칼국수", "식당"), _p("국수", "식당")]
+    out = nodes.verify_places(_state(cands, request={"transport": "car"}))
+    cats = [p["category"] for p in out["verified"]]
+    assert cats.count("식당") == 2 and "올림픽뮤지엄" in [p["name"] for p in out["verified"]]
+    assert not any(a == b == "식당" for a, b in itertools.pairwise(cats))  # 식당이 연달아 나오지 않는다
+
+
+def test_route_step_separates_back_to_back_restaurants(monkeypatch):
+    monkeypatch.setattr(nodes.get_route, "route", lambda *a, **k: {"transport": "car", "duration_min": 5, "distance_m": 1000, "polyline": [], "estimated": False})
+    places = [_p("파스타", "식당", lat=37.50), _p("생선찜", "식당", lat=37.501), _p("아트센터", lat=37.502), _p("카페", "카페", lat=37.503), _p("호텔", "숙소", lat=37.504)]
+    out = nodes.optimize_route({"request": {"transport": "car", "start_time": "11:00", "end_time": "20:00"}, "verified": places, "trace": [], "warnings": []})
+    cats = [p["category"] for p in out["places"]]
+    assert cats == ["관광지", "식당", "카페", "식당", "숙소"]
