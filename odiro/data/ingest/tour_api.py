@@ -147,16 +147,19 @@ def normalize_detail(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 class TourClient:
-    def __init__(self, service_key: str | None = None, daily_limit: int = DEV_DAILY_LIMIT) -> None:
+    def __init__(self, service_key: str | None = None, daily_limit: int = DEV_DAILY_LIMIT, tag: str = "") -> None:
+        """tag: 추가 키용 구분자(예: "k2"). 키마다 일일 한도 카운터 파일을 따로 둔다 (기본 키는 기존 파일 그대로)."""
         self.key = service_key or settings.tour_api_key
+        self.tag = tag or "기본"
+        sfx = f":{tag}" if tag else ""
         if not self.key:
             raise SystemExit("TOUR_API_KEY 가 .env 에 없습니다")
         if "%" in self.key:
             raise SystemExit("TOUR_API_KEY 가 Encoding 키로 보입니다. data.go.kr 의 Decoding 키를 넣으세요")
         self.http = httpx.Client(timeout=30)
-        self.quota_list = DailyQuota("tour:areaBasedList2", daily_limit)
-        self.quota_detail = DailyQuota("tour:detailCommon2", daily_limit)
-        self.quota_code = DailyQuota("tour:ldongCode2", daily_limit)
+        self.quota_list = DailyQuota(f"tour:areaBasedList2{sfx}", daily_limit)
+        self.quota_detail = DailyQuota(f"tour:detailCommon2{sfx}", daily_limit)
+        self.quota_code = DailyQuota(f"tour:ldongCode2{sfx}", daily_limit)
 
     def _call(self, op: str, quota: DailyQuota, **params: Any) -> tuple[list[dict[str, Any]], int]:
         if quota.exhausted():
@@ -311,6 +314,11 @@ def main(argv: list[str] | None = None) -> None:
     ensure_dirs()
     areas = regions.parse_area_args(args.area, args.all)
     client = TourClient(daily_limit=args.daily_limit)
+    extra_keys = [k.strip() for k in settings.tour_api_keys_extra.split(",") if k.strip() and k.strip() != client.key]
+    # 추가 키는 개발계정 한도로 본다 (--daily-limit 은 기본 키에만 적용)
+    extra_clients = [TourClient(service_key=k, tag=f"k{i}") for i, k in enumerate(extra_keys, 2)]
+    if extra_clients:
+        log.info("추가 TourAPI 키 %d개 사용", len(extra_clients))
     log.info("대상 시도: %s | 타입: %s", ", ".join(f"{a}({regions.sido_name(a)})" for a in areas), args.types)
 
     for code in areas:
@@ -321,8 +329,13 @@ def main(argv: list[str] | None = None) -> None:
                 log.error("%s 메타 수집 중단: %s", regions.sido_name(code), e)
                 break
         if not args.no_detail:
-            collect_detail(client, code, args.detail_limit, args.types)
-            if client.quota_detail.exhausted():
+            # 기본 키를 먼저 쓰고, 한도가 차면 추가 키(TOUR_API_KEYS_EXTRA)로 같은 지역을 이어서 받는다
+            for c in [client, *extra_clients]:
+                if c.quota_detail.exhausted():
+                    continue
+                log.info("상세 수집 키: %s (오늘 남은 한도 %d)", c.tag, c.quota_detail.remaining)
+                collect_detail(c, code, args.detail_limit, args.types)
+            if all(c.quota_detail.exhausted() for c in [client, *extra_clients]):
                 log.warning("detailCommon2 오늘 한도 소진. 나머지 시도 상세는 내일 `--no-meta` 로 이어서")
                 args.no_detail = True
 

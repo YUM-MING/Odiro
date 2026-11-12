@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # 데이터
     tour_api_key: str = ""
+    tour_api_keys_extra: str = ""  # 추가 TourAPI 키(쉼표로 구분). 상세 수집에서 TOUR_API_KEY 한도가 차면 순서대로 이어 쓴다
     naver_client_id: str = ""
     naver_client_secret: str = ""
     tavily_api_key: str = ""
