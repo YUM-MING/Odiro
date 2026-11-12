@@ -40,7 +40,7 @@
 | 장소 상세 | **서울 6,995 / 8,008** (남은 1,013건은 전부 쇼핑). 인천·경기 0 |
 | 블로그 | 수도권 67,172건, 라벨링 완료 |
 | 벡터 DB (로컬) | 69,479청크, 741MB (장소 7,366 + 블로그 62,113) |
-| 벡터 DB (배포) | **11/11 판 63,347청크** — 11/12~13 수집분은 아직 배포에 없다 (3번 "벡터 DB 올리기") |
+| 벡터 DB (배포) | 11/13 판 69,479청크 (`gs://odiro-where-data/vectorstore.tgz`, 11/13 업로드·배포). 이후 수집분은 3번 "벡터 DB 올리기" 로 반영 |
 | 테스트 | `pytest` 83개(네트워크 없음), `ruff`, 프론트 `npm run lint` · `npm run build` 통과 |
 
 ### 3. 매일 할 일 / 첫날 할 일
@@ -161,7 +161,7 @@ gh workflow run deploy --repo YUM-MING/Odiro      # 또는 아무 커밋이나 p
 | GitHub | https://github.com/YUM-MING/Odiro (`main`), 배포 기록 `/actions` |
 | GCP 프로젝트 | `odiro-where` — Cloud Run https://console.cloud.google.com/run?project=odiro-where , 버킷 `gs://odiro-where-data` |
 | 원본 데이터 + 수집 상태 | `odiro-data-20261113.tgz` (28MB: `data/raw`, `cache/ingest_state`) — **YUM-MING 이 Drive 에 올리고 링크를 여기에 기입** |
-| 벡터 DB (11/13, 69,479청크) | `vectorstore-20261113.tgz` (500MB) — 위와 같이 Drive. 배포용 `gs://odiro-where-data/vectorstore.tgz` 는 아직 11/11 판 |
+| 벡터 DB (11/13, 69,479청크) | `vectorstore-20261113.tgz` (500MB) — 위와 같이 Drive. 배포용 `gs://odiro-where-data/vectorstore.tgz` 도 같은 판 (GCP 권한이 있으면 여기서 받아도 된다) |
 | API 키 | 메신저 비공개 노트 (`.env` 완성본, TourAPI 키 3개 포함) |
 | 시연 캐시 | `python scripts/warm_demo_cache.py --date <시연일>` → `cache/demo/*.json` |
 
@@ -170,7 +170,7 @@ gh workflow run deploy --repo YUM-MING/Odiro      # 또는 아무 커밋이나 p
 - [x] `main` 에 push 됐고 빌드 통과 (`pytest` 83, `ruff`, `npm run lint`, `npm run build`)
 - [x] `.env`·데이터가 git 에 안 들어갔는지 확인
 - [ ] 데이터 tgz 두 개를 Drive 에 올리고 7번에 링크 기입 (파일은 `C:\Users\LYM\odiro-release\` 에 만들어 둠)
-- [ ] 11/13 벡터 DB 를 GCS 에 올리고 배포 (3번 "벡터 DB 올리기")
+- [x] 11/13 벡터 DB 를 GCS 에 올리고 배포
 - [ ] 다음 담당자에게 `.env` 전달 + 메신저로 알림
 
 ---
