@@ -1,5 +1,5 @@
 // /plan: 조건 요약 + 진행 상태 + 채팅(결과·수정) | 지도 스플릿 뷰
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   createCourse,
@@ -19,8 +19,8 @@ import {
 import Builder from './Builder'
 import * as I from './Icons'
 import MapView from './MapView'
-import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoRouteLink, kakaoToLink, kindColor, placeKind, type Kind } from './mapUtil'
-import { renderMarkdown } from './markdown'
+import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoRouteLink, kakaoToLink, kindColor, legLabel, placeKind, type Kind } from './mapUtil'
+import { renderMarkdown, splitAnswer } from './markdown'
 import { EDIT_NODES, GENERATE_NODES, MOCK_ENABLED, mockCourse, mockEdit, simulateProgress } from './mock'
 import Progress from './Progress'
 import { initialSteps, type StepState } from './steps'
@@ -426,7 +426,14 @@ export default function Plan() {
                 <div key={m.id} className="msg odiro">
                   <span className="avatar" aria-hidden="true" />
                   <div className="bubble">
-                    <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
+                    {/* 현재 코스의 답변은 장소 목록·이동 줄을 카드가 대신 보여주므로 글에서는 소개(앞)·팁(뒤)만 쓴다.
+                        이전 코스의 답변은 카드가 없으니 글 전체를 그대로 보여준다 */}
+                    <div
+                      className="md"
+                      dangerouslySetInnerHTML={{
+                        __html: renderMarkdown(m.course && m.course.course_id === course?.course_id ? splitAnswer(m.text).head : m.text),
+                      }}
+                    />
                     {m.course && m.course.course_id === course?.course_id && (
                       <div className="places">
                         <div className="legend" aria-label="색 구분">
@@ -454,9 +461,10 @@ export default function Plan() {
                             </div>
                             {idxs.map((i) => {
                               const p = course.places[i]
+                              const leg = course.legs.find((l) => l.from_idx === i)
                               return (
+                                <Fragment key={`${p.day}-${p.order}`}>
                                 <button
-                                  key={`${p.day}-${p.order}`}
                                   className={`place-card${selected === i ? ' selected' : ''}`}
                                   data-place-idx={i}
                                   onClick={() => setSelected(i)}
@@ -506,11 +514,16 @@ export default function Plan() {
                                     <I.Refresh size={14} /> 바꾸기
                                   </span>
                                 </button>
+                                {leg && <div className="pc-leg">{legLabel(leg)}</div>}
+                                </Fragment>
                               )
                             })}
                           </div>
                         ))}
                       </div>
+                    )}
+                    {m.course && m.course.course_id === course?.course_id && splitAnswer(m.text).tail && (
+                      <div className="md answer-tail" dangerouslySetInnerHTML={{ __html: renderMarkdown(splitAnswer(m.text).tail) }} />
                     )}
                   </div>
                 </div>

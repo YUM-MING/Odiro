@@ -14,6 +14,27 @@ function inline(s: string): string {
   return out
 }
 
+/**
+ * 답변 글에서 장소 카드가 이미 보여주는 줄(번호 목록·이동 안내 ↳·Day 소제목)을 빼고,
+ * 카드 앞(head: 소개 등)과 뒤(tail: 팁·참고)로 나눈다.
+ * 이동 정보는 카드 사이에 구조화된 데이터(legs)로 따로 그린다.
+ */
+export function splitAnswer(md: string): { head: string; tail: string } {
+  const head: string[] = []
+  const tail: string[] = []
+  let afterPlaces = false
+  for (const raw of md.replace(/\r\n/g, '\n').split('\n')) {
+    const line = raw.trimEnd()
+    if (/^\s*\d+[.)]\s+/.test(line) || /^#{1,3}\s*day\s*\d/i.test(line.trim())) {
+      afterPlaces = true
+      continue
+    }
+    if (/^\s*↳/.test(line)) continue
+    ;(afterPlaces ? tail : head).push(line)
+  }
+  return { head: head.join('\n').trim(), tail: tail.join('\n').trim() }
+}
+
 export function renderMarkdown(md: string): string {
   const lines = md.replace(/\r\n/g, '\n').split('\n')
   const html: string[] = []

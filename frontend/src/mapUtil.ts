@@ -1,4 +1,4 @@
-import type { PlaceOut } from './api'
+import type { LegOut, PlaceOut } from './api'
 
 /** Day 별 동선(선) 색 (trip 모드) */
 export const DAY_COLORS = ['#ff6b4a', '#2f9e55', '#d98c12']
@@ -28,6 +28,13 @@ export function placeKind(category: string): Kind {
 
 export function kindColor(p: Pick<PlaceOut, 'category'>): string {
   return KIND_COLOR[placeKind(p.category)]
+}
+
+/** 장소 사이 이동 안내 한 줄. 예) "🚶 도보 12분 · 900m", "🚌 대중교통 약 25분 · 5.1km" */
+export function legLabel(leg: LegOut): string {
+  const icon = { walk: '🚶 도보', transit: '🚌 대중교통', car: '🚗 자차' }[leg.transport]
+  const dist = leg.distance_m >= 1000 ? `${(leg.distance_m / 1000).toFixed(1)}km` : `${leg.distance_m}m`
+  return `${icon} ${leg.estimated ? '약 ' : ''}${leg.duration_min}분 · ${dist}`
 }
 
 const point = (p: PlaceOut) => `${encodeURIComponent(p.name)},${p.lat},${p.lng}`
