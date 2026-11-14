@@ -152,10 +152,11 @@ export const getMoods = () =>
     .then((r) => r.data.moods)
     .catch(() => [...MOODS])
 
-export const createCourse = (req: CourseRequest) =>
-  api.post<CourseResponse>('/api/course', req).then((r) => r.data)
-export const startCourse = (req: CourseRequest) =>
-  api.post<JobStarted>('/api/course/start', req).then((r) => r.data)
+/** refresh=true: 서버의 7일 결과 캐시를 건너뛰고 새로 만든다 ('다시 만들기') */
+export const createCourse = (req: CourseRequest, refresh = false) =>
+  api.post<CourseResponse>('/api/course', req, { params: refresh ? { refresh: true } : undefined }).then((r) => r.data)
+export const startCourse = (req: CourseRequest, refresh = false) =>
+  api.post<JobStarted>('/api/course/start', req, { params: refresh ? { refresh: true } : undefined }).then((r) => r.data)
 export const editCourse = (req: EditRequest) =>
   api.post<CourseResponse>('/api/course/edit', req).then((r) => r.data)
 export const startEdit = (req: EditRequest) =>

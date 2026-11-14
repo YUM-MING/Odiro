@@ -172,10 +172,11 @@ export default function Plan() {
     [applyStep, finish, fail],
   )
 
+  /** refresh: '다시 만들기'처럼 같은 조건이어도 서버 캐시를 건너뛰고 새로 만들 때 */
   const generate = useCallback(
-    (r: CourseRequest) => {
+    (r: CourseRequest, refresh = false) => {
       setChat([])
-      void run(GENERATE_NODES, () => startCourse(r), () => createCourse(r), () => mockCourse(r))
+      void run(GENERATE_NODES, () => startCourse(r, refresh), () => createCourse(r, refresh), () => mockCourse(r))
     },
     [run],
   )
@@ -199,12 +200,14 @@ export default function Plan() {
   useEffect(() => {
     if (!req) return
     const key = JSON.stringify(req)
+    // 이미 이 조건으로 생성을 시작했다면(조건 바꾸기 → 다시 만들기) 이전 코스를 복원하지 않는다.
+    // 복원하면 진행 상태가 'done' 으로 덮여 새로 만드는 중인데도 이전 결과만 보인다.
+    if (startedFor.current === key) return
     if (course && course.request.region === req.region && !navState.fresh) {
       if (chat.length === 0) setChat([{ id: course.course_id, role: 'odiro', text: course.answer_md, course }])
       setPhase('done')
       return
     }
-    if (startedFor.current === key) return
     startedFor.current = key
     generate(req)
     // 새로고침 때 또 생성하지 않도록 fresh 플래그를 history state 에서 지운다
@@ -313,7 +316,7 @@ export default function Plan() {
         </button>
         <div className="plan-actions">
           {usingMock && <span className="mock-badge" title="백엔드에 연결되지 않아 예시 데이터를 보여줍니다">예시 모드</span>}
-          <button className="btn btn-ghost" onClick={() => generate(req)} disabled={phase === 'running'}>
+          <button className="btn btn-ghost" onClick={() => generate(req, true)} disabled={phase === 'running'}>
             <I.Refresh size={16} /> 다시 만들기
           </button>
           <div className="share-wrap" ref={shareRef}>

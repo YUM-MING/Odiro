@@ -118,10 +118,13 @@ def _stream(g, state: dict[str, Any], sequence: tuple[str, ...], on_progress: Pr
     return merged
 
 
-def run_course(req: CourseRequest, on_progress: Progress | None = None, use_cache: bool = True) -> CourseResponse:
+def run_course(
+    req: CourseRequest, on_progress: Progress | None = None, use_cache: bool = True, refresh: bool = False
+) -> CourseResponse:
+    """refresh=True: 캐시된 결과를 읽지 않고 새로 만든다 ('다시 만들기'). 새 결과는 캐시에 다시 저장한다."""
     t0 = time.time()
     key = cache_key("course", req.model_dump())
-    if use_cache:
+    if use_cache and not refresh:
         hit = cache().get(key)
         if hit:
             resp = CourseResponse.model_validate(hit)

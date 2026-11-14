@@ -82,10 +82,10 @@ def moods() -> dict:
 # ---------- 동기 ----------
 
 
-def _run_course_blocking(req: CourseRequest) -> CourseResponse:
+def _run_course_blocking(req: CourseRequest, refresh: bool = False) -> CourseResponse:
     from odiro.agent.run import run_course
 
-    return run_course(req)
+    return run_course(req, refresh=refresh)
 
 
 def _run_edit_blocking(edit: EditRequest) -> CourseResponse:
@@ -95,9 +95,10 @@ def _run_edit_blocking(edit: EditRequest) -> CourseResponse:
 
 
 @app.post("/api/course", response_model=CourseResponse)
-async def create_course(req: CourseRequest) -> CourseResponse:
+async def create_course(req: CourseRequest, refresh: bool = False) -> CourseResponse:
+    """refresh=true 면 캐시를 건너뛰고 새로 만든다 (프론트의 '다시 만들기')."""
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_run_course_blocking, req), timeout=SYNC_TIMEOUT_SEC)
+        return await asyncio.wait_for(asyncio.to_thread(_run_course_blocking, req, refresh), timeout=SYNC_TIMEOUT_SEC)
     except TimeoutError as e:
         raise HTTPException(503, "코스 생성이 너무 오래 걸립니다. 잠시 후 다시 시도해 주세요.") from e
     except Exception as e:
@@ -168,10 +169,14 @@ def _start_job(target, *args) -> JobStarted:
 
 
 @app.post("/api/course/start", response_model=JobStarted)
-def start_course(req: CourseRequest) -> JobStarted:
+def start_course(req: CourseRequest, refresh: bool = False) -> JobStarted:
+    """refresh=true 면 캐시를 건너뛰고 새로 만든다 (프론트의 '다시 만들기')."""
     from odiro.agent.run import run_course
 
-    return _start_job(run_course, req)
+    def target(r: CourseRequest, on_progress):
+        return run_course(r, on_progress, refresh=refresh)
+
+    return _start_job(target, req)
 
 
 @app.post("/api/course/edit/start", response_model=JobStarted)
