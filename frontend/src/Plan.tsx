@@ -217,14 +217,25 @@ export default function Plan() {
 
   useEffect(() => () => cancelRef.current?.(), [])
 
-  const submitDraft = () => {
-    if (!draft) return
-    saveRequest(draft)
-    saveCourse(null)
-    setReq(draft)
+  /**
+   * 조건 드로어를 닫으면서 고친 조건을 적용한다 (바깥 클릭·X·Enter 모두 같다).
+   * 새 코스는 만들지 않는다. 헤더의 '다시 만들기'가 이 조건으로 만든다.
+   */
+  const applyDraft = () => {
+    if (!draft || !req) return setDraft(null)
+    const next: CourseRequest = {
+      ...draft,
+      // 비우거나 잘못 입력한 채 닫았을 때는 이전 값을 유지
+      region: draft.region.trim() || req.region,
+      date: draft.date.length === 10 ? draft.date : req.date,
+    }
     setDraft(null)
-    startedFor.current = JSON.stringify(draft)
-    generate(draft)
+    if (JSON.stringify(next) === JSON.stringify(req)) return
+    saveRequest(next)
+    // 이 조건으로는 자동 생성하지 않도록 표시 (첫 진입 effect 가 지역이 바뀐 걸 보고 생성하는 것을 막는다)
+    startedFor.current = JSON.stringify(next)
+    setReq(next)
+    showToast("조건을 바꿨어요. '다시 만들기'를 누르면 새 코스를 만들어요.")
   }
 
   const sendInput = () => {
@@ -585,15 +596,16 @@ export default function Plan() {
       </div>
 
       {draft && (
-        <div className="drawer-backdrop" onClick={() => setDraft(null)}>
+        <div className="drawer-backdrop" onClick={applyDraft}>
           <div className="drawer" role="dialog" aria-modal="true" aria-label="조건 바꾸기" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <strong>조건 바꾸기</strong>
-              <button className="icon-btn" aria-label="닫기" onClick={() => setDraft(null)}>
+              <button className="icon-btn" aria-label="닫기" onClick={applyDraft}>
                 <I.Close size={18} />
               </button>
             </div>
-            <Builder value={draft} onChange={setDraft} moods={moods} onSubmit={submitDraft} submitLabel="이 조건으로 다시 만들기" expanded />
+            <p className="muted small drawer-hint">닫으면 바꾼 조건이 적용돼요. 새 코스는 위의 '다시 만들기'를 눌러 만들어요.</p>
+            <Builder value={draft} onChange={setDraft} moods={moods} onSubmit={applyDraft} expanded hideSubmit />
           </div>
         </div>
       )}

@@ -21,9 +21,19 @@ interface Props {
   submitLabel?: string
   /** 드로어에서는 상세 조건을 처음부터 펼친다 */
   expanded?: boolean
+  /** 제출 버튼을 숨긴다 (드로어: 닫을 때 조건이 적용되고, 새 코스는 헤더의 '다시 만들기'로 만든다). Enter 로는 여전히 제출된다 */
+  hideSubmit?: boolean
 }
 
-export default function Builder({ value, onChange, moods, onSubmit, submitLabel = 'AI로 나만의 코스 만들기', expanded = false }: Props) {
+export default function Builder({
+  value,
+  onChange,
+  moods,
+  onSubmit,
+  submitLabel = 'AI로 나만의 코스 만들기',
+  expanded = false,
+  hideSubmit = false,
+}: Props) {
   const [uiMode, setUiMode] = useState<UiMode>(value.mode === 'trip' ? 'trip' : value.party.includes('연인') ? 'date' : 'day')
   const [more, setMore] = useState(expanded)
   const [error, setError] = useState<string | null>(null)
@@ -224,11 +234,13 @@ export default function Builder({ value, onChange, moods, onSubmit, submitLabel 
         </p>
       )}
 
-      <button className="cta" type="submit">
-        <I.Sparkle size={20} />
-        <span>{submitLabel}</span>
-        <span className="cta-arrow">→</span>
-      </button>
+      {!hideSubmit && (
+        <button className="cta" type="submit">
+          <I.Sparkle size={20} />
+          <span>{submitLabel}</span>
+          <span className="cta-arrow">→</span>
+        </button>
+      )}
     </form>
   )
 }

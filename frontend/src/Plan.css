@@ -376,6 +376,7 @@
   display: flex; flex-direction: column; gap: 12px;
 }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; font-size: 18px; }
+.drawer-hint { margin: 6px 0 12px; line-height: 1.45; }
 
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
