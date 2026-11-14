@@ -24,7 +24,7 @@ import { renderMarkdown } from './markdown'
 import { EDIT_NODES, GENERATE_NODES, MOCK_ENABLED, mockCourse, mockEdit, simulateProgress } from './mock'
 import Progress from './Progress'
 import { initialSteps, type StepState } from './steps'
-import { formatDate, loadCourse, loadRequest, saveCourse, saveRequest, summarize } from './request'
+import { formatDate, loadCourse, loadRequest, saveCourse, saveRequest, shareConditions, summarize } from './request'
 import './Plan.css'
 
 type Phase = 'idle' | 'running' | 'done' | 'error'
@@ -61,6 +61,9 @@ export default function Plan() {
   const [input, setInput] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const [usingMock, setUsingMock] = useState(MOCK_ENABLED)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [shareOverride, setShareOverride] = useState<Record<string, boolean>>({}) // 사용자가 바꾼 체크 상태
+  const shareRef = useRef<HTMLDivElement>(null)
 
   const cancelRef = useRef<(() => void) | null>(null)
   const startedFor = useRef<string | null>(null)
@@ -228,25 +231,65 @@ export default function Plan() {
     edit(text)
   }
 
-  const share = async () => {
-    if (!course) return
-    const lines = [
-      `[Odiro] ${course.title || `${course.request.region} 코스`} · ${formatDate(course.request.date)}`,
-      ...course.places.map(
-        (p) =>
-          `${course.request.mode === 'trip' ? `Day${p.day} ` : ''}${p.order}. ${p.name}${p.arrive ? ` (${p.arrive})` : ''} — ${p.address}\n   ${p.place_url || kakaoToLink(p)}`,
-      ),
-      '',
-      'https://odiro-where.web.app',
-    ]
-    try {
-      await navigator.clipboard.writeText(lines.join('\n'))
-      setToast('코스를 복사했어요. 메신저에 붙여넣기!')
-    } catch {
-      setToast('복사에 실패했어요. 브라우저 권한을 확인해 주세요.')
+  const shareItems = useMemo(() => (course ? shareConditions(course.request, course.meta.est_cost_total) : []), [course])
+  const isShareOn = (c: { key: string; defaultOn: boolean }) => shareOverride[c.key] ?? c.defaultOn
+
+  useEffect(() => {
+    if (!shareOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (shareRef.current && !shareRef.current.contains(e.target as Node)) setShareOpen(false)
     }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setShareOpen(false)
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [shareOpen])
+
+  const showToast = (msg: string) => {
+    setToast(msg)
     window.setTimeout(() => setToast(null), 2500)
   }
+
+  /** 체크된 조건만 넣은 공유 텍스트 */
+  const buildShareText = (): string => {
+    if (!course) return ''
+    const r = course.request
+    const car = r.transport === 'car'
+    const trip = r.mode === 'trip'
+    const picked = shareItems.filter(isShareOn)
+    const lines = [
+      `[Odiro] ${course.title || `${r.region} 코스`} · ${formatDate(r.date)}`,
+      ...(picked.length ? ['', '📋 이런 조건으로 짠 코스예요', ...picked.map((c) => `· ${c.text}`)] : []),
+    ]
+    byDay.forEach(([day, idxs]) => {
+      const ps = idxs.map((i) => course.places[i])
+      lines.push('', trip ? `■ Day ${day}` : '■ 코스')
+      ps.forEach((p) =>
+        lines.push(`${p.order}. ${p.name}${p.arrive ? ` (${p.arrive})` : ''} — ${p.address}`, `   ${p.place_url || kakaoToLink(p)}`),
+      )
+      const route = kakaoRouteLink(ps, car ? 'car' : 'walk')
+      if (route) {
+        // 카카오맵 경로는 출발·도착·경유지 5곳, 최대 7곳까지만 받는다
+        lines.push(`${car ? '🚗 전체 경로 (자차)' : '🚶 전체 경로 (도보)'}${ps.length > 7 ? ' · 앞 7곳' : ''}: ${route}`)
+      }
+    })
+    lines.push('', 'https://odiro-where.web.app')
+    return lines.join('\n')
+  }
+
+  const copyShare = async () => {
+    try {
+      await navigator.clipboard.writeText(buildShareText())
+      showToast('코스를 복사했어요. 메신저에 붙여넣기!')
+      setShareOpen(false)
+    } catch {
+      showToast('복사에 실패했어요. 브라우저 권한을 확인해 주세요.')
+    }
+  }
+
 
   const byDay = useMemo(() => {
     const m = new Map<number, number[]>()
@@ -273,9 +316,38 @@ export default function Plan() {
           <button className="btn btn-ghost" onClick={() => generate(req)} disabled={phase === 'running'}>
             <I.Refresh size={16} /> 다시 만들기
           </button>
-          <button className="btn btn-primary" onClick={share} disabled={!course}>
-            <I.Share size={16} /> 공유
-          </button>
+          <div className="share-wrap" ref={shareRef}>
+            <button
+              className="btn btn-primary"
+              onClick={() => setShareOpen((o) => !o)}
+              disabled={!course}
+              aria-expanded={shareOpen}
+              aria-haspopup="dialog"
+            >
+              <I.Share size={16} /> 공유
+            </button>
+            {shareOpen && course && (
+              <div className="share-pop" role="dialog" aria-label="공유 설정">
+                <p className="share-title">함께 보낼 조건</p>
+                <p className="share-hint">체크한 항목이 공유 글에 들어가요. 장소·경로 링크는 항상 포함돼요.</p>
+                <div className="share-checks">
+                  {shareItems.map((c) => (
+                    <label key={c.key} className="share-check">
+                      <input
+                        type="checkbox"
+                        checked={isShareOn(c)}
+                        onChange={(e) => setShareOverride((o) => ({ ...o, [c.key]: e.target.checked }))}
+                      />
+                      <span>{c.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="share-actions">
+                  <button className="share-btn primary" onClick={copyShare}>복사하기</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

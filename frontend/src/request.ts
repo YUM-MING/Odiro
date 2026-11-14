@@ -96,6 +96,42 @@ export function formatDate(iso: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}(${w})`
 }
 
+/** 공유 텍스트에 넣을 수 있는 조건 항목. 사용자가 체크박스로 고른다 */
+export interface ShareCondition {
+  key: string
+  label: string // 체크박스에 보이는 이름
+  text: string // 공유 텍스트에 들어가는 한 줄
+  defaultOn: boolean
+}
+
+/**
+ * 공유용 조건 항목 목록. 값이 없는 항목은 만들지 않는다.
+ * 숙소·요청 사항은 직접 적은 개인 입력이라 기본은 꺼 둔다.
+ */
+export function shareConditions(r: CourseRequest, estCostTotal = 0): ShareCondition[] {
+  const when =
+    r.mode === 'trip'
+      ? `${formatDate(r.date)} 출발 · ${r.days - 1}박 ${r.days}일`
+      : `${formatDate(r.date)} ${r.start_time}~${r.end_time}`
+  const items: ShareCondition[] = [
+    { key: 'basic', label: '지역·모드·이동수단', text: `${r.region || '지역 미정'} · ${MODE_LABEL[r.mode]} · ${TRANSPORT_LABEL[r.transport]}`, defaultOn: true },
+    { key: 'when', label: '날짜·시간', text: when, defaultOn: true },
+    {
+      key: 'budget',
+      label: '예산',
+      text: `1인 예산 ${formatBudget(r.budget)}${r.budget > 0 && r.mode === 'trip' ? ' (전체 일정 합계, 숙박비 제외)' : ''}`,
+      defaultOn: true,
+    },
+  ]
+  if (r.party) items.push({ key: 'party', label: '동행', text: `동행 ${r.party}`, defaultOn: true })
+  if (r.moods.length) items.push({ key: 'moods', label: '분위기', text: `분위기 ${r.moods.join(', ')}`, defaultOn: true })
+  if (estCostTotal > 0)
+    items.push({ key: 'cost', label: '1인 예상 비용', text: `1인 예상 약 ${estCostTotal.toLocaleString('ko-KR')}원 (추정)`, defaultOn: true })
+  if (r.lodging) items.push({ key: 'lodging', label: '숙소', text: `숙소 ${r.lodging}`, defaultOn: false })
+  if (r.free_text) items.push({ key: 'free', label: '요청 사항', text: `요청 사항 "${r.free_text}"`, defaultOn: false })
+  return items
+}
+
 export function summarize(r: CourseRequest): string {
   const parts = [r.region || '지역 미정', formatDate(r.date)]
   if (r.mode === 'trip') parts.push(`${r.days - 1}박 ${r.days}일`)

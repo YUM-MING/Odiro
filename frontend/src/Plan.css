@@ -39,6 +39,29 @@
 .plan-actions { display: flex; align-items: center; gap: 8px; }
 .plan-actions .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; font-size: 14px; }
 .plan-actions .btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+/* 공유 패널 (모바일에서 숨겨지는 .btn-ghost / .btn span 규칙을 피하려고 별도 클래스를 쓴다) */
+.share-wrap { position: relative; }
+.share-pop {
+  position: absolute; right: 0; top: calc(100% + 10px); z-index: 50;
+  width: min(300px, calc(100vw - 32px)); padding: 16px;
+  background: #fff; border-radius: 18px;
+  box-shadow: 0 0 0 1.5px var(--line), 0 18px 40px rgba(0, 0, 0, 0.14);
+}
+.share-title { margin: 0 0 4px; font-size: 15px; font-weight: 800; color: var(--ink); }
+.share-hint { margin: 0 0 12px; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.share-checks { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.share-check { display: flex; align-items: center; gap: 10px; padding: 7px 4px; font-size: 14px; color: var(--ink); cursor: pointer; }
+.share-check input { width: 17px; height: 17px; accent-color: var(--coral); cursor: pointer; }
+.share-actions { display: flex; gap: 8px; }
+.share-btn {
+  flex: 1; padding: 10px 14px; border-radius: 999px;
+  font-size: 14px; font-weight: 700; color: var(--ink);
+  background: #fff; box-shadow: 0 0 0 1.5px var(--line);
+}
+.share-btn:hover { box-shadow: 0 0 0 1.5px var(--coral); }
+.share-btn.primary { background: var(--coral); color: #fff; box-shadow: none; }
+.share-btn.primary:hover { background: var(--coral-deep); }
 .mock-badge {
   padding: 5px 10px;
   border-radius: 999px;
