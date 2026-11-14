@@ -98,6 +98,20 @@ export default function Plan() {
     chatEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [chat, phase])
 
+  // 지도 핀을 눌러 장소를 고르면 채팅창의 장소 카드도 화면 안으로 가져온다.
+  // 채팅 영역(.chat)만 스크롤한다 (scrollIntoView 는 모바일에서 페이지 전체를 움직여 지도가 밀려난다).
+  useEffect(() => {
+    if (selected === null) return
+    const card = document.querySelector<HTMLElement>(`.place-card[data-place-idx="${selected}"]`)
+    const scroller = card?.closest<HTMLElement>('.chat')
+    if (!card || !scroller) return
+    const c = card.getBoundingClientRect()
+    const s = scroller.getBoundingClientRect()
+    if (c.top >= s.top && c.bottom <= s.bottom) return // 이미 보이면 그대로
+    const centered = scroller.scrollTop + (c.top - s.top) - (s.height - c.height) / 2
+    scroller.scrollTo({ top: Math.max(0, centered), behavior: 'smooth' })
+  }, [selected])
+
   const applyStep = useCallback((s: TraceStep) => {
     setSteps((prev) => {
       const i = prev.findIndex((p) => p.node === s.node)
@@ -444,6 +458,7 @@ export default function Plan() {
                                 <button
                                   key={`${p.day}-${p.order}`}
                                   className={`place-card${selected === i ? ' selected' : ''}`}
+                                  data-place-idx={i}
                                   onClick={() => setSelected(i)}
                                 >
                                   <span className="pc-order" style={{ background: kindColor(p) }}>
@@ -581,17 +596,6 @@ export default function Plan() {
 
         <main className="right">
           <MapView kakaoKey={kakaoKey} places={course?.places ?? []} legs={course?.legs ?? []} selected={selected} onSelect={setSelected} />
-          {course && (
-            <div className="map-links">
-              <strong>{course.title || `${course.request.region} 코스`}</strong>
-              <span className="muted"> · 카카오맵으로 보기:</span>
-              {course.places.map((p) => (
-                <a key={`${p.day}-${p.order}`} href={p.place_url || kakaoToLink(p)} target="_blank" rel="noopener noreferrer">
-                  {p.order}. {p.name}
-                </a>
-              ))}
-            </div>
-          )}
         </main>
       </div>
 
