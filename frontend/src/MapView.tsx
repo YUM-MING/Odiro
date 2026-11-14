@@ -146,22 +146,11 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
             <div>
               <strong>{sel.name}</strong>
               <span className="muted"> · {sel.category}</span>
-              {sel.arrive && (
-                <div className="muted small">
-                  {sel.arrive} 도착 · {sel.stay_min}분 머무름
-                </div>
-              )}
+              {/* 도착·체류 시간, 추천 이유, 비용, 태그는 채팅의 장소 카드에서 본다. 여기는 장소 자체의 세부 정보 */}
             </div>
           </div>
           {sel.address && <div className="small">{sel.address}</div>}
           {sel.review_summary && <p className="popup-review">“{sel.review_summary}”</p>}
-          {sel.tags.length > 0 && (
-            <div className="chips">
-              {sel.tags.map((t) => (
-                <span key={t} className="chip">{t}</span>
-              ))}
-            </div>
-          )}
           <div className="popup-links">
             <a href={kakaoReviewLink(sel)} target="_blank" rel="noopener noreferrer">리뷰 보기</a>
             <a href={kakaoToLink(sel)} target="_blank" rel="noopener noreferrer">길찾기</a>

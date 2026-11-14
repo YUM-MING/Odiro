@@ -19,7 +19,7 @@ import {
 import Builder from './Builder'
 import * as I from './Icons'
 import MapView from './MapView'
-import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoReviewLink, kakaoRouteLink, kakaoToLink, kindColor, placeKind, type Kind } from './mapUtil'
+import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoRouteLink, kakaoToLink, kindColor, placeKind, type Kind } from './mapUtil'
 import { renderMarkdown } from './markdown'
 import { EDIT_NODES, GENERATE_NODES, MOCK_ENABLED, mockCourse, mockEdit, simulateProgress } from './mock'
 import Progress from './Progress'
@@ -477,7 +477,7 @@ export default function Plan() {
                                         {!!p.parking && <span>주차 {p.parking}</span>}
                                       </span>
                                     )}
-                                    {p.review_summary && <span className="pc-review">💬 {p.review_summary}</span>}
+                                    {/* 카드는 코스의 흐름(순서·시간·이유·비용·태그). 리뷰 요약·주소·링크는 지도 정보 창(MapView) */}
                                     {p.tags.length > 0 && (
                                       <span className="chips">
                                         {p.tags.map((t) => (
@@ -485,31 +485,6 @@ export default function Plan() {
                                         ))}
                                       </span>
                                     )}
-                                    <span className="pc-links">
-                                      {[
-                                        { label: '리뷰 보기', href: kakaoReviewLink(p) },
-                                        { label: course.request.transport === 'car' ? '내비·길찾기' : '길찾기', href: kakaoToLink(p) },
-                                      ].map((l) => (
-                                        <span
-                                          key={l.label}
-                                          className="pc-link"
-                                          role="link"
-                                          tabIndex={0}
-                                          onClick={(e) => {
-                                            e.stopPropagation()
-                                            window.open(l.href, '_blank', 'noopener,noreferrer')
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.stopPropagation()
-                                              window.open(l.href, '_blank', 'noopener,noreferrer')
-                                            }
-                                          }}
-                                        >
-                                          {l.label} ↗
-                                        </span>
-                                      ))}
-                                    </span>
                                   </span>
                                   <span
                                     className="pc-edit"

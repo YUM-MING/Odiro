@@ -221,10 +221,6 @@
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .pc-kind { font-weight: 700; font-size: 12.5px; }
-.pc-review { color: var(--ink-soft); font-size: 12.5px; }
-.pc-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.pc-link { font-size: 12px; font-weight: 700; color: var(--ink-soft); padding: 2px 9px; border-radius: 999px; box-shadow: 0 0 0 1px var(--line); cursor: pointer; }
-.pc-link:hover, .pc-link:focus-visible { color: var(--coral); box-shadow: 0 0 0 1px var(--coral); }
 .info-strip .over { color: #c92a2a; font-weight: 700; }
 .place-card {
   width: 100%;
