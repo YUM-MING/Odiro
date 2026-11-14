@@ -32,3 +32,6 @@ cache/*
 Thumbs.db
 .vscode/
 .idea/
+
+# data archives (handover)
+*.tgz
