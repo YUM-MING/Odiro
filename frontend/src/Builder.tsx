@@ -173,6 +173,18 @@ export default function Builder({
               <span>종료</span>
               <input type="time" value={value.end_time} onChange={(e) => set('end_time', e.target.value)} step={1800} />
             </label>
+            <label className="more-field">
+              <span>총 인원</span>
+              <input
+                type="number"
+                className="headcount"
+                min={1}
+                max={20}
+                value={value.headcount}
+                onChange={(e) => set('headcount', Math.min(20, Math.max(1, Math.round(Number(e.target.value)) || 1)))}
+                aria-label="총 인원(본인 포함)"
+              />
+            </label>
             <label className="more-field grow">
               <span>동행</span>
               <input
@@ -186,7 +198,7 @@ export default function Builder({
           <label className="more-field">
             <span>
               1인 예산 <strong>{formatBudget(value.budget)}</strong>
-              <small className="muted"> {value.mode === 'trip' ? `· ${value.days}일 전체 합계 (숙박비 제외)` : '· 하루 합계'}</small>
+              <small className="muted"> {value.mode === 'trip' ? `· 1인당 ${value.days}일 전체 합계 (숙박비 제외)` : '· 1인당 하루 합계'}</small>
             </span>
             <input
               type="range"
@@ -197,6 +209,11 @@ export default function Builder({
               onChange={(e) => set('budget', Number(e.target.value))}
               aria-valuetext={formatBudget(value.budget)}
             />
+            {value.budget > 0 && value.headcount > 1 && (
+              <small className="muted">
+                {value.headcount}명 전체 약 <strong>{formatBudget(value.budget * value.headcount)}</strong> (1인 {formatBudget(value.budget)} × {value.headcount}명)
+              </small>
+            )}
           </label>
 
           <div className="more-field">

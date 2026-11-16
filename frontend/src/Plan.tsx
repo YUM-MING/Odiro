@@ -434,8 +434,10 @@ export default function Plan() {
                   title="장소별 1인 예상 비용의 합계 (추정치, 숙박비 제외)"
                 >
                   1인 예상 약 {course.meta.est_cost_total.toLocaleString('ko-KR')}원
+                  {course.request.headcount > 1 &&
+                    ` · ${course.request.headcount}명 약 ${(course.meta.est_cost_total * course.request.headcount).toLocaleString('ko-KR')}원`}
                   {course.request.budget > 0 &&
-                    ` / 예산 ${course.request.budget.toLocaleString('ko-KR')}원${course.request.mode === 'trip' ? ` (${course.request.days}일 합계)` : ''}`}
+                    ` / 1인 예산 ${course.request.budget.toLocaleString('ko-KR')}원${course.request.mode === 'trip' ? ` (${course.request.days}일 합계)` : ''}`}
                 </span>
               )}
               <span className="muted">RAG {course.meta.rag_docs} · 웹 {course.meta.web_docs}{course.meta.cached ? ' · 캐시' : ''}</span>

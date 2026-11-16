@@ -28,6 +28,7 @@ export function defaultRequest(): CourseRequest {
     moods: [],
     free_text: '',
     party: '',
+    headcount: 1,
     lodging: '',
   }
 }
@@ -119,11 +120,14 @@ export function shareConditions(r: CourseRequest, estCostTotal = 0): ShareCondit
     {
       key: 'budget',
       label: '예산',
-      text: `1인 예산 ${formatBudget(r.budget)}${r.budget > 0 && r.mode === 'trip' ? ' (전체 일정 합계, 숙박비 제외)' : ''}`,
+      text: `1인 예산 ${formatBudget(r.budget)}${r.budget > 0 && r.mode === 'trip' ? ' (전체 일정 합계, 숙박비 제외)' : ''}${
+        r.budget > 0 && r.headcount > 1 ? ` · ${r.headcount}명 합계 ${formatBudget(r.budget * r.headcount)}` : ''
+      }`,
       defaultOn: true,
     },
   ]
-  if (r.party) items.push({ key: 'party', label: '동행', text: `동행 ${r.party}`, defaultOn: true })
+  if (r.party || r.headcount > 1)
+    items.push({ key: 'party', label: '동행·인원', text: `동행 ${[r.party, r.headcount > 1 ? `총 ${r.headcount}명` : ''].filter(Boolean).join(' · ')}`, defaultOn: true })
   if (r.moods.length) items.push({ key: 'moods', label: '분위기', text: `분위기 ${r.moods.join(', ')}`, defaultOn: true })
   if (estCostTotal > 0)
     items.push({ key: 'cost', label: '1인 예상 비용', text: `1인 예상 약 ${estCostTotal.toLocaleString('ko-KR')}원 (추정)`, defaultOn: true })

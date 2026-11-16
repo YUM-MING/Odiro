@@ -40,6 +40,7 @@ class CourseRequest(BaseModel):
     moods: list[str] = Field(default_factory=list, description="MOODS 중 다중 선택")
     free_text: str = Field("", max_length=300, description="자유 조건. 예) 비건 메뉴 꼭 포함")
     party: str = Field("", description="동행. 예) 연인, 가족(아이 2), 친구")
+    headcount: int = Field(1, ge=1, le=20, description="총 인원(본인 포함). 예산은 1인 기준이고 전체 예산 = budget × headcount")
     lodging: str = Field("", max_length=80, description="여행 모드: 이미 정한 숙소 이름 (선택). 비우면 에이전트가 고른다")
 
 

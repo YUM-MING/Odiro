@@ -50,6 +50,7 @@ export interface CourseRequest {
   moods: string[]
   free_text: string
   party: string
+  headcount: number // 총 인원(본인 포함). 예산은 1인 기준, 전체 = budget × headcount
   lodging?: string // 여행 모드: 이미 정한 숙소 이름 (선택)
 }
 

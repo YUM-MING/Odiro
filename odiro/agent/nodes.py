@@ -119,6 +119,10 @@ def _conditions_text(req: dict[str, Any]) -> str:
         parts.append("분위기: " + ", ".join(req["moods"]))
     if req.get("party"):
         parts.append(f"동행: {req['party']}")
+    headcount = int(req.get("headcount") or 1)
+    if headcount > 1:
+        total = f", 전체 약 {int(req.get('budget', 0)) * headcount:,}원" if req.get("budget") else ""
+        parts.append(f"총 인원: {headcount}명 (예산·예상 비용은 모두 1인 기준{total}. 여러 명이 함께 먹고 즐기기 좋은 곳으로)")
     if req.get("free_text"):
         parts.append(f"추가 조건(반드시 반영): {req['free_text']}")
     if req.get("lodging") and _trip_days(req) > 1:

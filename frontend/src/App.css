@@ -290,7 +290,8 @@ input[type='date'].field-input { cursor: pointer; }
 .more-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-soft); }
 .more-field.grow { flex: 1; min-width: 160px; }
 .more-field strong { color: var(--coral); }
-.more-field input[type='time'], .more-field input:not([type]) {
+.more-field input.headcount { width: 72px; }
+.more-field input[type='time'], .more-field input:not([type]), .more-field input.headcount {
   padding: 9px 12px;
   border: 0;
   border-radius: 10px;
