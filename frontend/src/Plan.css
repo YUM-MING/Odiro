@@ -292,6 +292,20 @@
 }
 .send:disabled { background: #f0e4d6; color: #fff; cursor: default; }
 
+/* ---------- 날짜 탭 ---------- */
+.day-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.day-tab {
+  padding: 6px 14px; border-radius: 999px;
+  background: #fff; color: var(--ink-soft); font-weight: 800; font-size: 13px;
+  box-shadow: 0 0 0 1.5px var(--line);
+}
+.day-tab:hover { color: var(--day); box-shadow: 0 0 0 1.5px var(--day); }
+.day-tab.active { background: var(--day); color: #fff; box-shadow: none; }
+.map-day-tabs { position: absolute; top: 12px; left: 12px; z-index: 5; }
+.map-day-tabs .day-tab { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+.map-day-tabs .day-tab.active { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+.popup-parking { font-size: 13px; color: var(--ink-soft); }
+
 /* ---------- 지도 ---------- */
 .map-wrap { position: relative; flex: 1; min-height: 0; }
 /* z-index: 0 → 카카오맵 내부 레이어(z-index 1·2)가 이 안에 갇혀, 아래 .popup 을 덮지 못한다 */

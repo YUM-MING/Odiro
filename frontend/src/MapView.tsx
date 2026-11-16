@@ -1,6 +1,7 @@
 // Kakao Map JS: 번호 핀(커스텀 오버레이) + 동선 폴리라인 + 선택 장소 팝업.
 import { useEffect, useRef, useState } from 'react'
 import type { LegOut, PlaceOut } from './api'
+import DayTabs from './DayTabs'
 import * as I from './Icons'
 import { DAY_COLORS, kakaoReviewLink, kakaoToLink, kindColor } from './mapUtil'
 
@@ -27,9 +28,13 @@ interface Props {
   legs: LegOut[]
   selected: number | null
   onSelect: (idx: number | null) => void
+  days: number[]
+  activeDay: number
+  onDayChange: (day: number) => void
+  showParking: boolean // 자차 코스일 때만 정보 창에 주차장을 보인다
 }
 
-export default function MapView({ kakaoKey, places, legs, selected, onSelect }: Props) {
+export default function MapView({ kakaoKey, places, legs, selected, onSelect, days, activeDay, onDayChange, showParking }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const map = useRef<kakao.maps.Map | null>(null)
   const overlays = useRef<kakao.maps.CustomOverlay[]>([])
@@ -71,9 +76,10 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
     lines.current = []
     if (!places.length) return
 
+    // 하루치만 그린다 (여러 날이 한꺼번에 보이면 복잡하다). 단일 날 코스는 전부 day 1 이라 그대로 다 보인다
     const bounds = new kakao.maps.LatLngBounds()
     places.forEach((p, idx) => {
-      if (!p.verified) return
+      if (!p.verified || p.day !== activeDay) return
       const pos = new kakao.maps.LatLng(p.lat, p.lng)
       bounds.extend(pos)
       const el = document.createElement('button')
@@ -90,7 +96,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
     legs.forEach((leg) => {
       const a = places[leg.from_idx]
       const b = places[leg.to_idx]
-      if (!a || !b) return
+      if (!a || !b || a.day !== activeDay || b.day !== activeDay) return
       const path = (leg.polyline.length >= 2 ? leg.polyline : [[a.lat, a.lng], [b.lat, b.lng]]).map(
         ([lat, lng]) => new kakao.maps.LatLng(lat, lng),
       )
@@ -105,7 +111,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
       lines.current.push(line)
     })
     m.setBounds(bounds, 60, 60, 120, 60)
-  }, [ready, places, legs, selected, onSelect])
+  }, [ready, places, legs, selected, onSelect, activeDay])
 
   // 선택 장소로 이동
   useEffect(() => {
@@ -115,7 +121,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
     if (p) m.panTo(new kakao.maps.LatLng(p.lat, p.lng))
   }, [ready, selected, places])
 
-  const sel = selected !== null ? places[selected] : null
+  const sel = selected !== null && places[selected]?.day === activeDay ? places[selected] : null
 
   return (
     <div className="map-wrap">
@@ -134,6 +140,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
           <span>{sdkError}</span>
         </div>
       )}
+      <DayTabs days={days} active={activeDay} onChange={onDayChange} className="map-day-tabs" />
       {sel && (
         <div className="popup" role="dialog" aria-label={`${sel.name} 정보`}>
           <button className="popup-close" aria-label="닫기" onClick={() => onSelect(null)}>
@@ -150,6 +157,11 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect }: 
             </div>
           </div>
           {sel.address && <div className="small">{sel.address}</div>}
+          {showParking && (
+            <div className="popup-parking">
+              <span aria-hidden="true">🅿</span> {sel.parking ? `주차 ${sel.parking}` : '근처 주차장 정보가 없어요'}
+            </div>
+          )}
           {sel.review_summary && <p className="popup-review">“{sel.review_summary}”</p>}
           <div className="popup-links">
             <a href={kakaoReviewLink(sel)} target="_blank" rel="noopener noreferrer">리뷰 보기</a>

@@ -17,6 +17,7 @@ import {
   type TraceStep,
 } from './api'
 import Builder from './Builder'
+import DayTabs from './DayTabs'
 import * as I from './Icons'
 import MapView from './MapView'
 import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoRouteLink, kakaoToLink, kindColor, legLabel, placeKind, type Kind } from './mapUtil'
@@ -56,6 +57,7 @@ export default function Plan() {
   const [slow, setSlow] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [selected, setSelected] = useState<number | null>(null)
+  const [activeDay, setActiveDay] = useState(1)
   const [moods, setMoods] = useState<string[]>([...MOODS])
   const [kakaoKey, setKakaoKey] = useState<string | undefined>(undefined)
   const [input, setInput] = useState('')
@@ -112,6 +114,33 @@ export default function Plan() {
     scroller.scrollTo({ top: Math.max(0, centered), behavior: 'smooth' })
   }, [selected])
 
+  // 새 코스가 들어오면(생성·수정·저장본 복원) 첫날로 돌아가 1번 장소의 정보 창을 띄운다.
+  // 핀을 눌러야 정보가 나온다는 걸 처음 보는 사용자가 알 수 있게 하기 위해서다.
+  useEffect(() => {
+    if (!course || !course.places.length) return
+    const first = course.places.reduce((a, p, i) => (p.day < course.places[a].day ? i : a), 0)
+    setActiveDay(course.places[first].day)
+    setSelected(first)
+  }, [course])
+
+  const selectPlace = useCallback(
+    (idx: number | null) => {
+      setSelected(idx)
+      const day = idx === null ? undefined : course?.places[idx]?.day
+      if (day !== undefined) setActiveDay(day)
+    },
+    [course],
+  )
+
+  const changeDay = useCallback(
+    (day: number) => {
+      setActiveDay(day)
+      const first = course?.places.findIndex((p) => p.day === day) ?? -1
+      setSelected(first >= 0 ? first : null)
+    },
+    [course],
+  )
+
   const applyStep = useCallback((s: TraceStep) => {
     setSteps((prev) => {
       const i = prev.findIndex((p) => p.node === s.node)
@@ -125,7 +154,6 @@ export default function Plan() {
   const finish = useCallback((c: CourseResponse, userText?: string) => {
     setCourse(c)
     saveCourse(c)
-    setSelected(null)
     setPhase('done')
     setChat((prev) => [
       ...prev,
@@ -325,6 +353,9 @@ export default function Plan() {
     return [...m.entries()].sort((a, b) => a[0] - b[0])
   }, [course])
 
+  const days = byDay.map(([d]) => d)
+  const shownDay = days.includes(activeDay) ? activeDay : (days[0] ?? 1)
+
   if (!req) return null
 
   return (
@@ -443,7 +474,8 @@ export default function Plan() {
                               <span key={k}><i style={{ background: KIND_COLOR[k] }} />{KIND_LABEL[k]}</span>
                             ))}
                         </div>
-                        {byDay.map(([day, idxs]) => (
+                        <DayTabs days={days} active={shownDay} onChange={changeDay} />
+                        {byDay.filter(([day]) => day === shownDay).map(([day, idxs]) => (
                           <div key={day}>
                             <div className="day-label" style={{ color: DAY_COLORS[(day - 1) % DAY_COLORS.length] }}>
                               {course.request.mode === 'trip' && <span>Day {day}</span>}
@@ -467,7 +499,7 @@ export default function Plan() {
                                 <button
                                   className={`place-card${selected === i ? ' selected' : ''}`}
                                   data-place-idx={i}
-                                  onClick={() => setSelected(i)}
+                                  onClick={() => selectPlace(i)}
                                 >
                                   <span className="pc-order" style={{ background: kindColor(p) }}>
                                     {p.order}
@@ -479,13 +511,12 @@ export default function Plan() {
                                       {p.arrive && <span className="pc-time"><I.Clock size={12} /> {p.arrive} · {p.stay_min}분</span>}
                                     </span>
                                     {p.reason && <span className="pc-reason">{p.reason}</span>}
-                                    {(!!p.est_cost || !!p.parking) && (
+                                    {!!p.est_cost && (
                                       <span className="pc-extra">
-                                        {!!p.est_cost && <span>1인 약 {p.est_cost.toLocaleString('ko-KR')}원</span>}
-                                        {!!p.parking && <span>주차 {p.parking}</span>}
+                                        <span>1인 약 {p.est_cost.toLocaleString('ko-KR')}원</span>
                                       </span>
                                     )}
-                                    {/* 카드는 코스의 흐름(순서·시간·이유·비용·태그). 리뷰 요약·주소·링크는 지도 정보 창(MapView) */}
+                                    {/* 카드는 코스의 흐름(순서·시간·이유·비용·태그). 리뷰 요약·주소·주차장·링크는 지도 정보 창(MapView) */}
                                     {p.tags.length > 0 && (
                                       <span className="chips">
                                         {p.tags.map((t) => (
@@ -583,7 +614,17 @@ export default function Plan() {
         </aside>
 
         <main className="right">
-          <MapView kakaoKey={kakaoKey} places={course?.places ?? []} legs={course?.legs ?? []} selected={selected} onSelect={setSelected} />
+          <MapView
+            kakaoKey={kakaoKey}
+            places={course?.places ?? []}
+            legs={course?.legs ?? []}
+            selected={selected}
+            onSelect={selectPlace}
+            days={days}
+            activeDay={shownDay}
+            onDayChange={changeDay}
+            showParking={course?.request.transport === 'car'}
+          />
         </main>
       </div>
 
