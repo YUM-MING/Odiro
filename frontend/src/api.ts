@@ -55,6 +55,14 @@ export interface CourseRequest {
   lodging?: string // 여행 모드: 이미 정한 숙소 이름 (선택)
 }
 
+export interface IntroOut {
+  rest_date: string // 쉬는 날
+  use_time: string // 이용시간
+  use_fee: string // 이용요금
+  parking: string // 주차 가능 여부
+  parking_fee: string // 주차요금
+}
+
 export interface PlaceOut {
   order: number
   day: number
@@ -76,6 +84,7 @@ export interface PlaceOut {
   source: string
   est_cost?: number // 1인 예상 비용(원), 추정
   parking?: string // 자차: 가장 가까운 주차장
+  intro?: IntroOut | null // TourAPI 이용 정보 (있는 장소만)
 }
 
 export interface LegOut {

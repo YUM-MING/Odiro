@@ -55,6 +55,9 @@ SLEEP_BETWEEN_CALLS = 0.2
 
 META_PATH = TOUR_DIR / "area_{code}.jsonl"
 DETAIL_PATH = TOUR_DIR / "detail_{code}.jsonl"
+INTRO_PATH = TOUR_DIR / "intro_{code}.jsonl"
+# 쇼핑(38)·음식점(39) 제외: 식당·카페는 카카오에서 오고, 쇼핑은 대부분 시장·상가 (PROGRESS_DETAILINTRO 5번)
+INTRO_DEFAULT_TYPES = [12, 14, 15, 25, 28, 32]
 SIGUNGU_CACHE = STATE_DIR / "sigungu_{code}.json"
 
 
@@ -143,6 +146,41 @@ def normalize_detail(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# detailIntro2 는 콘텐츠 종류마다 필드명 접미사가 다르다 (restdate / restdateculture / restdateleports …).
+# 확인한 종류는 12·14·28 뿐이라 접두어로 찾는다. 다른 종류는 실제 응답 확인 필요.
+_INTRO_FIELDS: dict[str, tuple[str, ...]] = {
+    "rest_date": ("restdate",),
+    "use_time": ("usetime", "opentime", "playtime", "checkintime"),
+    "use_fee": ("usefee", "usetimefestival"),  # 축제는 요금이 usetimefestival 에 들어 있다
+    "parking": ("parking",),
+    "pet": ("chkpet",),
+    "info_center": ("infocenter",),
+}
+
+
+def _intro_pick(raw: dict[str, Any], prefixes: tuple[str, ...], skip: tuple[str, ...] = ()) -> str:
+    for pre in prefixes:
+        for key in sorted(raw):  # 접미사 없는 정확한 이름이 먼저 오도록 정렬
+            if key.startswith(pre) and not key.startswith(skip):
+                val = clean_text(str(raw[key]))
+                if val:
+                    return val
+    return ""
+
+
+def normalize_intro(raw: dict[str, Any]) -> dict[str, Any]:
+    """detailIntro2 한 행 → 공통 필드. 비어 있으면 빈 문자열(화면에서 기존 안내 문구로 대체)."""
+    out: dict[str, Any] = {"content_id": str(raw.get("contentid", ""))}
+    for name, prefixes in _INTRO_FIELDS.items():
+        # parking 은 parkingfee* 를, use_time 은 usetimefestival(=축제 요금)을 제외
+        skip = {"parking": ("parkingfee",), "use_time": ("usetimefestival",)}.get(name, ())
+        out[name] = _intro_pick(raw, prefixes, skip=skip)
+    out["parking_fee"] = _intro_pick(raw, ("parkingfee",))
+    out["content_type_id"] = int(raw.get("contenttypeid") or 0)
+    out["source"] = "tourapi"
+    return out
+
+
 # ---------- 호출 ----------
 
 
@@ -160,6 +198,7 @@ class TourClient:
         self.quota_list = DailyQuota(f"tour:areaBasedList2{sfx}", daily_limit)
         self.quota_detail = DailyQuota(f"tour:detailCommon2{sfx}", daily_limit)
         self.quota_code = DailyQuota(f"tour:ldongCode2{sfx}", daily_limit)
+        self.quota_intro = DailyQuota(f"tour:detailIntro2{sfx}", daily_limit)
 
     def _call(self, op: str, quota: DailyQuota, **params: Any) -> tuple[list[dict[str, Any]], int]:
         if quota.exhausted():
@@ -221,6 +260,16 @@ class TourClient:
     def fetch_detail(self, content_id: str) -> dict[str, Any] | None:
         rows, _ = self._call("detailCommon2", self.quota_detail, contentId=content_id)
         return normalize_detail(rows[0]) if rows else None
+
+    # --- 이용 정보 (휴무일·시간·요금·주차·반려동물) ---
+
+    def fetch_intro(self, content_id: str, content_type_id: int) -> dict[str, Any] | None:
+        rows, _ = self._call(
+            "detailIntro2", self.quota_intro, contentId=content_id, contentTypeId=content_type_id
+        )
+        if not rows:
+            return None
+        return normalize_intro({**rows[0], "contentid": content_id, "contenttypeid": content_type_id})
 
 
 # ---------- 파이프라인 ----------
@@ -287,6 +336,52 @@ def collect_detail(client: TourClient, sido_code: str, limit: int | None, types:
     return n
 
 
+def collect_intro(client: TourClient, sido_code: str, limit: int | None, types: list[int]) -> int:
+    """이용 정보를 소개글(detail)이 있는 장소부터 받아 intro_{code}.jsonl 에 추가 (이어받기).
+
+    값이 전부 빈 장소도 기록한다 (다음 실행에서 다시 호출하지 않도록).
+    """
+    meta_path = Path(str(META_PATH).format(code=sido_code))
+    detail_path = Path(str(DETAIL_PATH).format(code=sido_code))
+    intro_path = Path(str(INTRO_PATH).format(code=sido_code))
+    if not meta_path.exists():
+        log.warning("메타 파일이 없어 이용 정보를 건너뜀: %s", meta_path)
+        return 0
+    done = load_ids(intro_path, "content_id")
+    has_detail = load_ids(detail_path, "content_id")
+    order = {ct: i for i, ct in enumerate(regions.DETAIL_PRIORITY)}
+    todo = [
+        p
+        for p in read_jsonl(meta_path)
+        if p["content_id"] not in done and p["content_id"] in has_detail and p["content_type_id"] in types
+    ]
+    todo.sort(key=lambda p: p.get("modified", ""), reverse=True)
+    todo.sort(key=lambda p: order.get(p["content_type_id"], 99))
+    budget = client.quota_intro.remaining if limit is None else min(limit, client.quota_intro.remaining)
+    log.info(
+        "%s 이용 정보: 완료 %d / 남은 %d / 오늘 예산 %d",
+        regions.sido_name(sido_code), len(done), len(todo), budget,
+    )
+    n = 0
+    batch: list[dict[str, Any]] = []
+    try:
+        for p in todo[:budget]:
+            d = client.fetch_intro(p["content_id"], p["content_type_id"])
+            batch.append(d or {"content_id": p["content_id"], "content_type_id": p["content_type_id"], "source": "tourapi"})
+            n += 1
+            if len(batch) >= 50:
+                write_jsonl(intro_path, batch, append=True)
+                batch.clear()
+                log.info("  …%d건", n)
+    except (RetryableHTTPError, QuotaExceeded) as e:
+        log.warning("중단: %s", e)
+    finally:
+        if batch:
+            write_jsonl(intro_path, batch, append=True)
+    log.info("이용 정보 저장 %s (+%d건, 누적 %d)", intro_path, n, len(done) + n)
+    return n
+
+
 def merge_meta_detail(sido_code: str) -> Iterator[dict[str, Any]]:
     """다음 단계(라벨링·인덱싱)용: 메타 + 상세를 content_id 로 합쳐 돌려준다."""
     details = {d["content_id"]: d for d in read_jsonl(Path(str(DETAIL_PATH).format(code=sido_code)))}
@@ -305,6 +400,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--types", nargs="*", type=int, default=list(regions.CONTENT_TYPES), help="콘텐츠타입 (기본: 전부)")
     ap.add_argument("--no-meta", action="store_true", help="메타 수집 건너뛰기 (상세만)")
     ap.add_argument("--no-detail", action="store_true", help="상세 수집 건너뛰기 (메타만)")
+    ap.add_argument("--intro", action="store_true", help="이용 정보(detailIntro2: 휴무일·시간·요금·주차·반려동물)도 수집")
+    ap.add_argument("--intro-only", action="store_true", help="이용 정보만 수집 (메타·상세 건너뜀)")
+    ap.add_argument("--intro-limit", type=int, default=None, help="오늘 이용 정보 호출 상한 (기본: 남은 일일 한도)")
     ap.add_argument("--detail-limit", type=int, default=None, help="오늘 상세 호출 상한 (기본: 남은 일일 한도)")
     ap.add_argument("--daily-limit", type=int, default=DEV_DAILY_LIMIT, help="기능별 일일 한도 (운영계정이면 올릴 것)")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -320,6 +418,10 @@ def main(argv: list[str] | None = None) -> None:
     if extra_clients:
         log.info("추가 TourAPI 키 %d개 사용", len(extra_clients))
     log.info("대상 시도: %s | 타입: %s", ", ".join(f"{a}({regions.sido_name(a)})" for a in areas), args.types)
+
+    if args.intro_only:
+        args.intro, args.no_meta, args.no_detail = True, True, True
+    intro_types = [t for t in args.types if t in INTRO_DEFAULT_TYPES]
 
     for code in areas:
         if not args.no_meta:
@@ -339,9 +441,17 @@ def main(argv: list[str] | None = None) -> None:
                 log.warning("detailCommon2 오늘 한도 소진. 나머지 시도 상세는 내일 `--no-meta` 로 이어서")
                 args.no_detail = True
 
+    if args.intro:
+        for code in areas:
+            for c in [client, *extra_clients]:
+                if c.quota_intro.exhausted():
+                    continue
+                log.info("이용 정보 수집 키: %s (오늘 남은 한도 %d)", c.tag, c.quota_intro.remaining)
+                collect_intro(c, code, args.intro_limit, intro_types)
+
     log.info(
-        "오늘 호출: areaBasedList2 %d / detailCommon2 %d / ldongCode2 %d",
-        client.quota_list.used, client.quota_detail.used, client.quota_code.used,
+        "오늘 호출: areaBasedList2 %d / detailCommon2 %d / detailIntro2 %d / ldongCode2 %d",
+        client.quota_list.used, client.quota_detail.used, client.quota_intro.used, client.quota_code.used,
     )
 
 

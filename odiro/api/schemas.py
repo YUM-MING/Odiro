@@ -45,6 +45,16 @@ class CourseRequest(BaseModel):
     lodging: str = Field("", max_length=80, description="여행 모드: 이미 정한 숙소 이름 (선택). 비우면 에이전트가 고른다")
 
 
+class IntroOut(BaseModel):
+    """TourAPI detailIntro2 이용 정보. 값이 없는 항목은 빈 문자열."""
+
+    rest_date: str = ""  # 쉬는 날
+    use_time: str = ""  # 이용시간
+    use_fee: str = ""  # 이용요금
+    parking: str = ""  # 주차 가능 여부
+    parking_fee: str = ""  # 주차요금
+
+
 class PlaceOut(BaseModel):
     order: int  # 하루 안에서 방문 순서 (1부터)
     day: int = 1
@@ -66,6 +76,7 @@ class PlaceOut(BaseModel):
     source: str = ""  # rag / web / llm
     est_cost: int = 0  # 1인 예상 비용(원). LLM 추정치 — 화면에는 "약" 으로 표시
     parking: str = ""  # 자차: 가장 가까운 주차장 "이름 (약 120m)". 카카오 지도 기준, 없으면 빈 문자열
+    intro: IntroOut | None = None  # TourAPI 이용 정보 (휴무일·시간·요금·주차). TourAPI 에 있는 장소만
 
 
 class LegOut(BaseModel):

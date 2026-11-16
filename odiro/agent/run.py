@@ -25,6 +25,7 @@ from odiro.api.schemas import (
     CourseRequest,
     CourseResponse,
     EditRequest,
+    IntroOut,
     LegOut,
     PlaceOut,
     SunOut,
@@ -32,6 +33,7 @@ from odiro.api.schemas import (
     WeatherOut,
 )
 from odiro.tools._util import cache, cache_key
+from odiro.tools.tour_intro import find_intro
 
 log = logging.getLogger("odiro.agent")
 Progress = Callable[[TraceStep], None]
@@ -55,6 +57,11 @@ def edit_graph():
     return _edit_graph
 
 
+def _intro_for(p: dict[str, Any]) -> IntroOut | None:
+    found = find_intro(p["name"], p["lat"], p["lng"])
+    return IntroOut(**found) if found else None
+
+
 def _to_response(state: dict[str, Any], req: CourseRequest, elapsed_ms: int, cached: bool = False) -> CourseResponse:
     places = [
         PlaceOut(
@@ -64,6 +71,7 @@ def _to_response(state: dict[str, Any], req: CourseRequest, elapsed_ms: int, cac
             tags=p.get("tags") or [], review_summary=p.get("review_summary", ""), arrive=p.get("arrive", ""),
             stay_min=int(p.get("stay_min", 60)), image=p.get("image", ""), verified=True, source=p.get("source", ""),
             est_cost=int(p.get("est_cost") or 0), parking=p.get("parking", ""),
+            intro=_intro_for(p),
         )
         for p in state.get("places", [])
         if p.get("verified")

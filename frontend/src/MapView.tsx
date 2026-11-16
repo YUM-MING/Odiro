@@ -157,9 +157,19 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect, da
             </div>
           </div>
           {sel.address && <div className="small">{sel.address}</div>}
+          {sel.intro && (
+            <dl className="popup-intro">
+              {sel.intro.rest_date && (<><dt>쉬는 날</dt><dd>{sel.intro.rest_date}</dd></>)}
+              {sel.intro.use_time && (<><dt>이용시간</dt><dd>{sel.intro.use_time}</dd></>)}
+              {sel.intro.use_fee && (<><dt>이용요금</dt><dd>{sel.intro.use_fee}</dd></>)}
+              {(sel.intro.parking || sel.intro.parking_fee) && (
+                <><dt>전용 주차</dt><dd>{[sel.intro.parking, sel.intro.parking_fee && `요금 ${sel.intro.parking_fee}`].filter(Boolean).join(' · ')}</dd></>
+              )}
+            </dl>
+          )}
           {showParking && (
             <div className="popup-parking">
-              <span aria-hidden="true">🅿</span> {sel.parking ? `주차 ${sel.parking}` : '근처 주차장 정보가 없어요'}
+              <span aria-hidden="true">🅿</span> {sel.parking ? `근처 주차장 ${sel.parking}` : '근처 주차장 정보가 없어요'}
             </div>
           )}
           {sel.review_summary && <p className="popup-review">“{sel.review_summary}”</p>}

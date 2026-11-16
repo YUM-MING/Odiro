@@ -8,6 +8,7 @@ from odiro.data.ingest.tour_api import (
     TourApiError,
     clean_text,
     normalize_detail,
+    normalize_intro,
     normalize_place,
     parse_body,
 )
@@ -137,3 +138,28 @@ def test_parse_area_args_all_excludes_capital():
 def test_parse_area_args_rejects_unknown():
     with pytest.raises(SystemExit):
         regions.parse_area_args(["99"], False)
+
+
+def test_normalize_intro_tourist_spot():
+    r = normalize_intro({"contentid": "1", "contenttypeid": 12, "restdate": "매주 월요일", "usetime": "09:00~18:00",
+                         "parking": "가능", "chkpet": "불가", "infocenter": "02-1"})
+    assert r["rest_date"] == "매주 월요일" and r["use_time"] == "09:00~18:00"
+    assert r["parking"] == "가능" and r["pet"] == "불가" and r["use_fee"] == ""
+
+
+def test_normalize_intro_suffixed_fields_and_parking_fee():
+    r = normalize_intro({"contentid": "2", "contenttypeid": 14, "restdateculture": "연중무휴", "usefee": "5,000원",
+                         "parkingculture": "가능", "parkingfee": "무료", "chkpetculture": "가능"})
+    assert r["rest_date"] == "연중무휴" and r["use_fee"] == "5,000원"
+    assert r["parking"] == "가능" and r["parking_fee"] == "무료"
+
+
+def test_normalize_intro_empty_values_stay_empty():
+    r = normalize_intro({"contentid": "3", "contenttypeid": 28, "restdateleports": "", "usetimeleports": " ",
+                         "parkingfeeleports": "무료"})
+    assert r["rest_date"] == "" and r["use_time"] == "" and r["parking"] == "" and r["parking_fee"] == "무료"
+
+
+def test_normalize_intro_festival_fee_not_use_time():
+    r = normalize_intro({"contentid": "4", "contenttypeid": 15, "usetimefestival": "무료", "playtime": "10:00~18:00"})
+    assert r["use_fee"] == "무료" and r["use_time"] == "10:00~18:00"
