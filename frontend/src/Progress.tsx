@@ -1,5 +1,5 @@
 // 사이드바 노드 진행 표시. SSE progress 이벤트로 갱신된다.
-// 코스가 완성되면 한 줄로 접히고, 눌러서 과정을 다시 펼쳐 볼 수 있다.
+// 코스가 완성되면 한 줄로 접힌다. 만드는 중에도, 끝난 뒤에도 눌러서 접고 펼 수 있다.
 import { useState } from 'react'
 import * as I from './Icons'
 import { NODE_LABEL } from './mock'
@@ -24,7 +24,7 @@ export default function Progress({ steps, running, elapsedMs }: { steps: StepSta
           {running && ` · ${(elapsedMs / 1000).toFixed(0)}초`}
           {finished && totalSec > 0 && ` · ${totalSec.toFixed(0)}초`}
         </span>
-        {finished && (
+        {(running || finished) && (
           <button type="button" className="progress-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
             {open ? '접기' : '과정 보기'}
             <I.Chevron className={`chevron${open ? ' up' : ''}`} />
