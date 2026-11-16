@@ -108,7 +108,7 @@ def _stream(g, state: dict[str, Any], sequence: tuple[str, ...], on_progress: Pr
                 # 다음 노드 start 알림 (수정 그래프의 분기 포함)
                 nxt = None
                 if node == "modify":
-                    nxt = "draft_course" if delta.get("full_redraft") else "verify_places"
+                    nxt = "optimize_route" if delta.get("time_only") else "draft_course" if delta.get("full_redraft") else "verify_places"
                 elif node in sequence and sequence.index(node) + 1 < len(sequence):
                     nxt = sequence[sequence.index(node) + 1]
                 elif node == "draft_course" and "modify" in sequence:
@@ -188,7 +188,8 @@ def run_edit(edit: EditRequest, on_progress: Progress | None = None) -> CourseRe
         "rejected": [],
     }
     final = _stream(edit_graph(), state, EDIT_SEQUENCE, on_progress)
-    return _to_response(final, req, int((time.time() - t0) * 1000))
+    new_req = CourseRequest.model_validate(final.get("request") or req.model_dump())  # 시작 시각 변경이 반영된 요청
+    return _to_response(final, new_req, int((time.time() - t0) * 1000))
 
 
 # ---------- CLI ----------

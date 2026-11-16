@@ -45,6 +45,7 @@ export interface CourseRequest {
   date: string // YYYY-MM-DD
   start_time: string // HH:MM
   end_time: string
+  day_starts?: Record<number, string> // 날짜별 시작 시각 {day: HH:MM}. 채팅으로 시작 시간을 바꾸면 서버가 채운다
   days: number
   budget: number
   moods: string[]

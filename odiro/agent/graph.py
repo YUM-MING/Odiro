@@ -51,8 +51,8 @@ def build_edit_graph():
     g.set_entry_point("modify")
     g.add_conditional_edges(
         "modify",
-        lambda s: "draft_course" if s.get("full_redraft") else "verify_places",
-        {"draft_course": "draft_course", "verify_places": "verify_places"},
+        lambda s: "optimize_route" if s.get("time_only") else "draft_course" if s.get("full_redraft") else "verify_places",
+        {"draft_course": "draft_course", "verify_places": "verify_places", "optimize_route": "optimize_route"},
     )
     g.add_edge("draft_course", "verify_places")
     g.add_edge("verify_places", "optimize_route")

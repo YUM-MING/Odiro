@@ -87,6 +87,7 @@ class CourseState(TypedDict, total=False):
     edit_note: str
     edit_slot: dict[str, Any] | None  # {index, old(원래 장소), planned(처음 고른 교체 장소명)}
     full_redraft: bool
+    time_only: bool  # 시작 시각만 바꾸는 수정: 장소 검증 없이 바로 일정 계산
 
     # 출력
     final_answer: str

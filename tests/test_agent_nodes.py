@@ -369,3 +369,33 @@ def test_route_step_separates_back_to_back_restaurants(monkeypatch):
     out = nodes.optimize_route({"request": {"transport": "car", "start_time": "11:00", "end_time": "20:00"}, "verified": places, "trace": [], "warnings": []})
     cats = [p["category"] for p in out["places"]]
     assert cats == ["관광지", "식당", "카페", "식당", "숙소"]
+
+
+def _fake_route(monkeypatch):
+    monkeypatch.setattr(nodes.get_route, "route", lambda *a, **k: {"transport": "car", "duration_min": 5, "distance_m": 1000, "polyline": [], "estimated": False})
+
+
+def test_day_starts_override_start_time_per_day(monkeypatch):
+    _fake_route(monkeypatch)
+    places = [_p("A", day=1, lat=37.50), _p("B", "카페", day=1, lat=37.501), _p("C", day=2, lat=37.50), _p("D", "카페", day=2, lat=37.501)]
+    req = {"transport": "car", "start_time": "11:00", "end_time": "20:00", "day_starts": {1: "09:00"}}
+    out = nodes.optimize_route({"request": req, "verified": places, "trace": [], "warnings": []})
+    first = {p["day"]: p["arrive"] for p in out["places"] if p["order"] == 1}
+    assert first == {1: "09:00", 2: "11:00"}  # 지정하지 않은 날은 기존 시작 시각
+
+
+def test_modify_time_only_edit_updates_request_and_skips_swap(monkeypatch):
+    plan = nodes.EditPlan(target_number=0, schedule_only=True, time_changes=[nodes.TimeChange(day=1, start_time="09:00")])
+
+    class FakeChat:
+        def with_structured_output(self, _):
+            return self
+
+        def invoke(self, _):
+            return plan
+
+    monkeypatch.setattr(nodes, "chat", lambda *_: FakeChat())
+    places = [_p("A", verified=True), _p("B", "카페", order=2, verified=True)]
+    out = nodes.modify({"request": {"days": 1, "mode": "outing"}, "conditions": "", "places": places, "instruction": "첫째날 9시에 시작하게 바꿔줘", "trace": []})
+    assert out["time_only"] and out["request"]["day_starts"] == {1: "09:00"}
+    assert [p["name"] for p in out["verified"]] == ["A", "B"]  # 장소는 그대로

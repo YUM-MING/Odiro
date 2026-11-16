@@ -154,6 +154,15 @@ export default function Plan() {
   const finish = useCallback((c: CourseResponse, userText?: string) => {
     setCourse(c)
     saveCourse(c)
+    // 채팅으로 '첫째날 9시 시작' 처럼 시작 시각을 바꾸면 서버가 코스의 요청(day_starts)에 남긴다.
+    // '다시 만들기'도 같은 조건을 쓰도록 화면의 조건에도 합쳐 둔다 (이 조건으로는 자동 생성하지 않게 startedFor 도 맞춘다)
+    setReq((cur) => {
+      if (!cur || JSON.stringify(cur.day_starts ?? {}) === JSON.stringify(c.request.day_starts ?? {})) return cur
+      const next = { ...cur, day_starts: c.request.day_starts }
+      saveRequest(next)
+      startedFor.current = JSON.stringify(next)
+      return next
+    })
     setPhase('done')
     setChat((prev) => [
       ...prev,

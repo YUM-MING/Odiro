@@ -85,7 +85,14 @@ class MustHave(BaseModel):
     )
 
 
+class TimeChange(BaseModel):
+    day: int = Field(description="시작 시각을 바꿀 날짜 (첫째날=1, 둘째날=2)")
+    start_time: str = Field(description="그날 시작 시각 24시간제 HH:MM. 예) 오전 9시 → 09:00")
+
+
 class EditPlan(BaseModel):
+    time_changes: list[TimeChange] = Field(default_factory=list, description="일정 시작 시각을 바꿔 달라는 요청이면 날짜별로 채운다. 장소 교체 요청이면 빈 목록")
+    schedule_only: bool = Field(False, description="장소는 그대로 두고 시작 시각만 바꾸는 요청이면 true. 이때 target_number=0, place=null")
     target_number: int = Field(description="바꿀 장소의 번호 (현재 코스 목록의 '번호', 1부터). 전체 재구성 요청이면 0")
     place: DraftPlace | None = Field(None, description="그 자리에 넣을 새 장소. 전체 재구성이면 null")
     alternates: list[DraftPlace] = Field(default_factory=list, description="place 가 지도에서 확인되지 않을 때 대신 쓸, 같은 요청을 만족하는 다른 실존 장소 2~3개")
@@ -115,6 +122,8 @@ def _conditions_text(req: dict[str, Any]) -> str:
             else " (하루 합계)"
         ),
     ]
+    if req.get("day_starts"):
+        parts.append("날짜별 시작 시각(우선 적용): " + ", ".join(f"Day {d} {t}" for d, t in sorted(req["day_starts"].items())))
     if req.get("moods"):
         parts.append("분위기: " + ", ".join(req["moods"]))
     if req.get("party"):
@@ -1272,7 +1281,8 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
         pairs = list(itertools.pairwise(ordered))
         with ThreadPoolExecutor(max_workers=6) as ex:
             day_legs = list(ex.map(lambda ab: get_route.route(ab[0]["lat"], ab[0]["lng"], ab[1]["lat"], ab[1]["lng"], transport), pairs))
-        clock = req.get("start_time", "11:00")
+        starts = req.get("day_starts") or {}
+        clock = starts.get(day) or starts.get(str(day)) or req.get("start_time", "11:00")
         for i, p in enumerate(ordered):
             p = {**p, "order": i + 1, "day": day, "arrive": clock}
             places.append(p)
@@ -1463,7 +1473,8 @@ MODIFY_SYSTEM = DRAFT_SYSTEM + """
 - "다른 곳으로 바꿔줘" 처럼 조건이 없으면 같은 역할(카테고리)의 다른 장소로 바꿉니다.
 - 교체 장소는 같은 지역·같은 역할에서 요청한 성격(더 조용한, 실내, 저렴한 등)을 만족하는 **실존 장소**. 기존 코스의 다른 장소와 가까울수록 좋습니다.
 - name 은 지도에 등록된 상호 그대로만 ("성수동 애견동반카페 따우전드" ✗ → "따우전드 성수" ✓). 수식어·지역명을 붙이지 않습니다.
-- 코스 전체를 다시 짜달라는 요청이면 target_number=0, place=null."""
+- 코스 전체를 다시 짜달라는 요청이면 target_number=0, place=null.
+- "첫째날 9시에 시작", "둘째날은 10시부터" 처럼 **시작 시각만** 바꾸는 요청이면 schedule_only=true, time_changes 에 날짜별 시각(HH:MM), target_number=0, place=null. 장소는 바꾸지 않는다."""
 
 
 def modify(state: dict[str, Any]) -> dict[str, Any]:
@@ -1492,9 +1503,28 @@ def modify(state: dict[str, Any]) -> dict[str, Any]:
             "edit_note": f"수정 요청을 이해하지 못했어요 ({str(e)[:40]})",
             "trace": state.get("trace", []) + [{"node": "modify", "status": "error", "ms": _now_ms() - t0, "detail": str(e)[:80]}],
         }
+    # 시작 시각 변경: 요청(request)에 날짜별 시작 시각을 남겨, 이후 수정·다시 만들기에서도 유지되게 한다
+    new_req = state["request"]
+    changed = []
+    for tc in plan.time_changes:
+        if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", tc.start_time) and 1 <= tc.day <= _trip_days(state["request"]):
+            changed.append(tc)
+    if changed:
+        new_req = {**new_req, "day_starts": {**(new_req.get("day_starts") or {}), **{tc.day: tc.start_time for tc in changed}}}
+    req_update: dict[str, Any] = {"request": new_req} if changed else {}
+    if plan.schedule_only:
+        note = ", ".join(f"Day {tc.day} 시작을 {tc.start_time}으로" for tc in changed)
+        return {
+            **req_update,
+            "verified": places,
+            "time_only": True,
+            "edit_note": f"{note} 바꿨어요" if changed else "시작 시각을 알아듣지 못했어요. 예) 첫째날 9시에 시작",
+            "trace": state.get("trace", []) + [{"node": "modify", "status": "done", "ms": _now_ms() - t0, "detail": note or "시각 변경 없음"}],
+        }
     idx = target if target is not None else plan.target_number - 1
     if plan.place is None or idx < 0 or idx >= len(places):
         return {
+            **req_update,
             "candidates": [],
             "spares": [],
             "rejected": [p["name"] for p in places],
@@ -1566,6 +1596,7 @@ def modify(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         log.warning("수정 대체 후보 검색 실패: %s", e)
     return {
+        **req_update,
         "candidates": cands,
         "spares": spares,
         "rejected": list(state.get("rejected", [])) + [old["name"]],

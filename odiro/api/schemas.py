@@ -35,6 +35,7 @@ class CourseRequest(BaseModel):
     date: str = Field(..., description="출발일 YYYY-MM-DD")
     start_time: str = "11:00"  # HH:MM
     end_time: str = "20:00"
+    day_starts: dict[int, str] = Field(default_factory=dict, description="날짜별 시작 시각 {day: HH:MM}. 없는 날은 start_time. 채팅으로 '첫째날 9시 시작' 처럼 바꾸면 채워진다")
     days: int = Field(1, ge=1, le=3)  # trip 모드에서만 2 이상
     budget: int = Field(100_000, ge=0, description="1인 예산(원)")
     moods: list[str] = Field(default_factory=list, description="MOODS 중 다중 선택")
