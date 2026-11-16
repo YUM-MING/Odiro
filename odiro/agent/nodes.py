@@ -1477,6 +1477,14 @@ MODIFY_SYSTEM = DRAFT_SYSTEM + """
 - "첫째날 9시에 시작", "둘째날은 10시부터" 처럼 **시작 시각만** 바꾸는 요청이면 schedule_only=true, time_changes 에 날짜별 시각(HH:MM), target_number=0, place=null. 장소는 바꾸지 않는다."""
 
 
+_CLOCK_RE = re.compile(r"\d{1,2}\s*시|\d{1,2}\s*:\s*\d{2}|(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|열한|열두)\s*시|정오|자정")
+
+
+def _mentions_clock_time(text: str) -> bool:
+    """수정 요청에 '9시', '09:30', '열 시' 같은 시각 표현이 있는지."""
+    return bool(_CLOCK_RE.search(text or ""))
+
+
 def modify(state: dict[str, Any]) -> dict[str, Any]:
     """edit 흐름의 첫 노드. state 에 places/legs(기존 코스), instruction, target_index 가 들어온다."""
     t0 = _now_ms()
@@ -1506,7 +1514,8 @@ def modify(state: dict[str, Any]) -> dict[str, Any]:
     # 시작 시각 변경: 요청(request)에 날짜별 시작 시각을 남겨, 이후 수정·다시 만들기에서도 유지되게 한다
     new_req = state["request"]
     changed = []
-    for tc in plan.time_changes:
+    # LLM 이 장소 교체 요청에도 time_changes 를 임의로(예: Day 1 09:00) 채우는 일이 있어, 요청 문장에 시각 표현이 있을 때만 쓴다
+    for tc in plan.time_changes if _mentions_clock_time(instruction) else []:
         if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", tc.start_time) and 1 <= tc.day <= _trip_days(state["request"]):
             changed.append(tc)
     if changed:

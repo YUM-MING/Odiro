@@ -154,15 +154,8 @@ export default function Plan() {
   const finish = useCallback((c: CourseResponse, userText?: string) => {
     setCourse(c)
     saveCourse(c)
-    // 채팅으로 '첫째날 9시 시작' 처럼 시작 시각을 바꾸면 서버가 코스의 요청(day_starts)에 남긴다.
-    // '다시 만들기'도 같은 조건을 쓰도록 화면의 조건에도 합쳐 둔다 (이 조건으로는 자동 생성하지 않게 startedFor 도 맞춘다)
-    setReq((cur) => {
-      if (!cur || JSON.stringify(cur.day_starts ?? {}) === JSON.stringify(c.request.day_starts ?? {})) return cur
-      const next = { ...cur, day_starts: c.request.day_starts }
-      saveRequest(next)
-      startedFor.current = JSON.stringify(next)
-      return next
-    })
+    // 채팅으로 '첫째날 9시 시작' 처럼 바꾼 시작 시각(day_starts)은 이 코스(course.request)에만 남는다.
+    // 화면의 조건(req)에는 합치지 않으므로 '다시 만들기'·새 코스는 기본 시작 시각으로 만든다.
     setPhase('done')
     setChat((prev) => [
       ...prev,
@@ -225,7 +218,10 @@ export default function Plan() {
 
   /** refresh: '다시 만들기'처럼 같은 조건이어도 서버 캐시를 건너뛰고 새로 만들 때 */
   const generate = useCallback(
-    (r: CourseRequest, refresh = false) => {
+    (req0: CourseRequest, refresh = false) => {
+      // 채팅으로 바꾼 시작 시각은 새 코스에 이어가지 않는다 (이전에 저장된 조건에 남은 값도 제거)
+      const { day_starts: _drop, ...r } = req0
+      void _drop
       setChat([])
       void run(GENERATE_NODES, () => startCourse(r, refresh), () => createCourse(r, refresh), () => mockCourse(r))
     },
