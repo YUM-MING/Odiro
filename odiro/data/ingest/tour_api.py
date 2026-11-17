@@ -47,6 +47,7 @@ from odiro.data.ingest.common import (
     setup_logging,
     write_jsonl,
 )
+from odiro.data.ingest.sync import queue_purge
 
 BASE_URL = "https://apis.data.go.kr/B551011/KorService2"
 PAGE_SIZE = 1000
@@ -275,9 +276,25 @@ class TourClient:
 # ---------- 파이프라인 ----------
 
 
-def collect_meta(client: TourClient, sido_code: str, types: list[int]) -> Path:
-    """시도 하나의 메타를 전부 받아 area_{code}.jsonl 로 저장 (덮어쓰기, contentid 중복 제거)."""
-    path = Path(str(META_PATH).format(code=sido_code))
+def _stored_modified(path: Path) -> dict[str, str | None]:
+    """저장된 기록의 {content_id: 받을 때의 목록 modified}. 값이 없는 옛 기록은 None (갱신 판정에서 최신으로 본다)."""
+    out: dict[str, str | None] = {}
+    for r in read_jsonl(path):
+        out[str(r["content_id"])] = r.get("modified")
+    return out
+
+
+def needs_fetch(place: dict[str, Any], stored: dict[str, str | None]) -> bool:
+    """안 받았거나(신규), 받은 뒤 목록의 modified 가 달라졌으면(변경) 다시 받는다."""
+    cid = place["content_id"]
+    if cid not in stored:
+        return True
+    old = stored[cid]
+    return old is not None and old != (place.get("modified") or "")
+
+
+def fetch_meta(client: TourClient, sido_code: str, types: list[int]) -> list[dict[str, Any]]:
+    """시도 하나의 메타를 전부 받아 돌려준다 (contentid 중복 제거). 저장은 하지 않는다 — 중간에 실패하면 예외."""
     seen: set[str] = set()
     rows: list[dict[str, Any]] = []
     for ct in types:
@@ -288,6 +305,16 @@ def collect_meta(client: TourClient, sido_code: str, types: list[int]) -> Path:
             seen.add(place["content_id"])
             rows.append(place)
         log.info("  %s %s: %d건", regions.sido_name(sido_code), regions.CONTENT_TYPES.get(ct, ct), len(rows) - n_before)
+    return rows
+
+
+def collect_meta(client: TourClient, sido_code: str, types: list[int]) -> Path:
+    """시도 하나의 메타를 전부 받아 area_{code}.jsonl 로 저장 (덮어쓰기, contentid 중복 제거).
+
+    이미 저장된 목록이 있으면 덮어쓰지 말고 `scripts/daily_ingest.py` 의 갱신(sync)을 쓴다 — 삭제·변경 판정을 거친다.
+    """
+    path = Path(str(META_PATH).format(code=sido_code))
+    rows = fetch_meta(client, sido_code, types)
     write_jsonl(path, rows)
     log.info("메타 저장 %s (%d건)", path, len(rows))
     return path
@@ -300,39 +327,44 @@ def collect_detail(client: TourClient, sido_code: str, limit: int | None, types:
     if not meta_path.exists():
         log.warning("메타 파일이 없어 상세를 건너뜀: %s", meta_path)
         return 0
-    done = load_ids(detail_path, "content_id")
+    have = _stored_modified(detail_path)
     order = {ct: i for i, ct in enumerate(regions.DETAIL_PRIORITY)}
-    todo = [
-        p
-        for p in read_jsonl(meta_path)
-        if p["content_id"] not in done and p["content_type_id"] in types
-    ]
+    todo = [p for p in read_jsonl(meta_path) if p["content_type_id"] in types and needs_fetch(p, have)]
+    n_stale = sum(1 for p in todo if p["content_id"] in have)
     # 타입 우선순위 → 같은 타입 안에서는 최근 수정된(=살아 있을 확률 높은) 장소부터
     todo.sort(key=lambda p: p.get("modified", ""), reverse=True)
     todo.sort(key=lambda p: order.get(p["content_type_id"], 99))
     budget = client.quota_detail.remaining if limit is None else min(limit, client.quota_detail.remaining)
     log.info(
-        "%s 상세: 완료 %d / 남은 %d / 오늘 예산 %d",
-        regions.sido_name(sido_code), len(done), len(todo), budget,
+        "%s 상세: 완료 %d / 남은 %d (그중 갱신 %d) / 오늘 예산 %d",
+        regions.sido_name(sido_code), len(have), len(todo), n_stale, budget,
     )
     n = 0
     batch: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        # 다시 받은 장소는 옛 라벨·벡터를 지울 목록에 먼저 올린다 (쓰기 전에: 중간에 죽어도 다음 실행이 이어서 정리).
+        refreshed = [d["content_id"] for d in batch if d["content_id"] in have]
+        if refreshed:
+            queue_purge(sido_code, refreshed)
+        write_jsonl(detail_path, batch, append=True)
+        batch.clear()
+
     try:
         for p in todo[:budget]:
             d = client.fetch_detail(p["content_id"])
             if d:
-                batch.append(d)
+                batch.append({**d, "modified": p.get("modified", "")})
                 n += 1
             if len(batch) >= 50:
-                write_jsonl(detail_path, batch, append=True)
-                batch.clear()
+                flush()
                 log.info("  …%d건", n)
     except (RetryableHTTPError, QuotaExceeded) as e:
         log.warning("중단: %s", e)
     finally:
         if batch:
-            write_jsonl(detail_path, batch, append=True)
-    log.info("상세 저장 %s (+%d건, 누적 %d)", detail_path, n, len(done) + n)
+            flush()
+    log.info("상세 저장 %s (+%d건, 누적 %d)", detail_path, n, len(have) + n - n_stale)
     return n
 
 
@@ -347,13 +379,13 @@ def collect_intro(client: TourClient, sido_code: str, limit: int | None, types: 
     if not meta_path.exists():
         log.warning("메타 파일이 없어 이용 정보를 건너뜀: %s", meta_path)
         return 0
-    done = load_ids(intro_path, "content_id")
+    done = _stored_modified(intro_path)
     has_detail = load_ids(detail_path, "content_id")
     order = {ct: i for i, ct in enumerate(regions.DETAIL_PRIORITY)}
     todo = [
         p
         for p in read_jsonl(meta_path)
-        if p["content_id"] not in done and p["content_id"] in has_detail and p["content_type_id"] in types
+        if p["content_id"] in has_detail and p["content_type_id"] in types and needs_fetch(p, done)
     ]
     todo.sort(key=lambda p: p.get("modified", ""), reverse=True)
     todo.sort(key=lambda p: order.get(p["content_type_id"], 99))
@@ -367,7 +399,8 @@ def collect_intro(client: TourClient, sido_code: str, limit: int | None, types: 
     try:
         for p in todo[:budget]:
             d = client.fetch_intro(p["content_id"], p["content_type_id"])
-            batch.append(d or {"content_id": p["content_id"], "content_type_id": p["content_type_id"], "source": "tourapi"})
+            row = d or {"content_id": p["content_id"], "content_type_id": p["content_type_id"], "source": "tourapi"}
+            batch.append({**row, "modified": p.get("modified", "")})
             n += 1
             if len(batch) >= 50:
                 write_jsonl(intro_path, batch, append=True)

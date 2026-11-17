@@ -27,7 +27,9 @@ def build() -> list[dict]:
     for intro_path in sorted(TOUR_DIR.glob("intro_*.jsonl")):
         code = intro_path.stem.removeprefix("intro_")
         meta = {p["content_id"]: p for p in read_jsonl(TOUR_DIR / f"area_{code}.jsonl")}
-        for r in read_jsonl(intro_path):
+        # 갱신은 뒤에 덧붙이므로 같은 장소가 여러 줄일 수 있다 → 마지막 줄만
+        latest = {r["content_id"]: r for r in read_jsonl(intro_path)}
+        for r in latest.values():
             p = meta.get(r["content_id"])
             vals = {k: r[k] for k in FIELDS if r.get(k)}
             if not p or not vals or p.get("lat") is None or p.get("lng") is None:

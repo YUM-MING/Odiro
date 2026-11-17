@@ -5,6 +5,9 @@
 #   - GitHub Variable CI_ENABLED  : "true"
 # 벡터 DB(data/vectorstore, git 제외)는 GCS 에서 받아 이미지에 포함한다:
 #   - GitHub Variable VECTORSTORE_GCS_URI : 예) gs://odiro-where-data/vectorstore.tgz  (없으면 벡터 DB 없이 배포)
+# 이용 정보 조회 파일(data/tour_intro.json)은 daily-ingest 가 매일 새로 만들어 같은 버킷의 tour_intro.json 으로 올린다.
+#   배포는 그 판을 받아 이미지에 넣는다 (없으면 git 에 있는 판을 그대로 쓴다).
+# daily-ingest.yml 이 수집을 끝낸 뒤 이 워크플로를 workflow_call 로 호출한다.
 # API 키는 여기서 다루지 않는다 → Cloud Run 콘솔 환경변수에 직접 등록 (DATA_AND_API.md).
 
 name: deploy
@@ -13,6 +16,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: deploy-main
@@ -45,6 +49,17 @@ jobs:
           mkdir -p data/vectorstore
           tar xzf /tmp/vectorstore.tgz -C data/
           du -sh data/vectorstore
+
+      - name: Fetch tour_intro.json from GCS (optional)
+        if: vars.VECTORSTORE_GCS_URI != ''
+        run: |
+          uri="$(dirname "${{ vars.VECTORSTORE_GCS_URI }}")/tour_intro.json"
+          if gsutil -q stat "$uri"; then
+            gsutil cp "$uri" data/tour_intro.json
+            ls -l data/tour_intro.json
+          else
+            echo "버킷에 tour_intro.json 없음 — git 에 있는 판을 사용"
+          fi
 
       - name: Deploy to Cloud Run
         run: |

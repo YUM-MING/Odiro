@@ -1,0 +1,101 @@
+# 매일 06:30(KST) TourAPI 수집(신규·변경·삭제 반영) → 라벨링·임베딩 → 버킷 업로드 → 배포.
+#
+# 관광공사 데이터는 매일 04:30 에 갱신되므로 06:00 이후에 돌린다 (UTC 21:30 = KST 06:30).
+# 상태는 GCS 버킷이 기준이다: 이 워크플로가 받아서 이어 돌리고, 성공하면 다시 올린다.
+#   ingest-data.tgz  data/raw + cache/ingest_state   (원본·라벨·수집 상태)
+#   vectorstore.tgz  data/vectorstore                (Chroma 인덱스)
+#   tour_intro.json  서버용 이용 정보 조회 파일
+# 필요한 것: Secrets GCP_SA_KEY(버킷 쓰기 권한), TOUR_API_KEY, TOUR_API_KEYS_EXTRA, OPENAI_API_KEY / Variable CI_ENABLED=true
+# 처음 한 번은 로컬의 data/raw·cache/ingest_state·data/vectorstore·data/tour_intro.json 을 버킷에 올려야 한다 (docs/PLAN_AUTO_INGEST.md D-1).
+# 수집이 실패(종료 코드 ≠ 0)하면 업로드·배포를 하지 않는다. 각자 PC 에서 수집을 돌리면 데이터가 갈라지니 돌리지 않는다.
+
+name: daily-ingest
+
+on:
+  schedule:
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+    inputs:
+      force_removal:
+        description: "한 번에 5% 넘는 삭제도 반영 (대량 삭제가 사실임을 확인한 뒤에만)"
+        type: boolean
+        default: false
+      deploy:
+        description: "수집 성공 후 배포까지"
+        type: boolean
+        default: true
+
+concurrency:
+  group: daily-ingest
+  cancel-in-progress: false
+
+env:
+  DATA_BUCKET: gs://odiro-where-data
+  PROJECT: odiro-where
+  TZ: Asia/Seoul # 일일 한도 카운터(date.today)를 한국 날짜로 맞춘다
+  PYTHONUTF8: "1"
+
+jobs:
+  ingest:
+    if: vars.CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -e .
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT }}
+
+      - name: Download state from GCS
+        run: |
+          # 상태가 없으면 처음부터 시작하지 않고 멈춘다 (전체 재수집은 한도·비용이 크다)
+          if ! gsutil -q stat "$DATA_BUCKET/ingest-data.tgz"; then
+            echo "::error::$DATA_BUCKET/ingest-data.tgz 가 없습니다. 로컬 데이터를 먼저 올리세요 (docs/PLAN_AUTO_INGEST.md D-1)"
+            exit 1
+          fi
+          gsutil cp "$DATA_BUCKET/ingest-data.tgz" /tmp/ingest-data.tgz
+          tar xzf /tmp/ingest-data.tgz -C .
+          gsutil cp "$DATA_BUCKET/vectorstore.tgz" /tmp/vectorstore.tgz
+          tar xzf /tmp/vectorstore.tgz -C data/
+          rm -f /tmp/ingest-data.tgz /tmp/vectorstore.tgz
+          du -sh data/raw data/vectorstore cache/ingest_state
+
+      - name: Ingest (sync → detail → intro → label → index)
+        env:
+          TOUR_API_KEY: ${{ secrets.TOUR_API_KEY }}
+          TOUR_API_KEYS_EXTRA: ${{ secrets.TOUR_API_KEYS_EXTRA }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # 운영계정 승인으로 한도가 오르면 아래 줄 끝에 --daily-limit 10000 을 추가한다 (승인 전에는 넣지 않는다)
+          python scripts/daily_ingest.py ${{ inputs.force_removal && '--force-removal' || '' }}
+
+      - name: Upload state to GCS
+        run: |
+          # 이전 판은 backup/ 에 한 세대 남긴다 (서버 측 복사). 상태 파일(ingest-data)을 마지막에 올려 중간에 끊겨도 다음 실행이 이어지게 한다.
+          for f in vectorstore.tgz tour_intro.json ingest-data.tgz; do
+            gsutil -q stat "$DATA_BUCKET/$f" && gsutil cp "$DATA_BUCKET/$f" "$DATA_BUCKET/backup/$f" || true
+          done
+          tar czf /tmp/vectorstore.tgz -C data vectorstore
+          gsutil cp /tmp/vectorstore.tgz "$DATA_BUCKET/vectorstore.tgz"
+          gsutil cp data/tour_intro.json "$DATA_BUCKET/tour_intro.json"
+          tar czf /tmp/ingest-data.tgz data/raw cache/ingest_state
+          gsutil cp /tmp/ingest-data.tgz "$DATA_BUCKET/ingest-data.tgz"
+          ls -l /tmp/*.tgz data/tour_intro.json
+
+  deploy:
+    needs: ingest
+    if: ${{ vars.CI_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.deploy) }}
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
