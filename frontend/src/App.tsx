@@ -97,7 +97,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <span>© 2026 Odiro</span>
+        <span>© 2026 Odiro · 출처 : ⓒ한국관광공사</span>
         <span className="status">
           {error && <span className="dot bad" title={error} />}
           {error && '백엔드 연결 실패'}

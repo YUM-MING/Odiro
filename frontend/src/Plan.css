@@ -247,6 +247,8 @@
 .pc-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
 .pc-time { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); }
 .pc-reason { color: var(--ink-soft); font-size: 13px; }
+.credit { margin: 8px 0 0; font-size: 12px; color: var(--ink-soft); text-align: center; }
+.pc-credit { font-size: 11px; color: var(--ink-soft); }
 .pc-extra { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-soft); font-size: 12px; }
 .pc-edit {
   flex: none;
@@ -306,6 +308,7 @@
 .map-day-tabs .day-tab.active { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
 .popup-parking { font-size: 13px; color: var(--ink-soft); }
 .popup-intro { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 0; font-size: 13px; }
+.popup-credit { margin-top: 4px; font-size: 11px; color: var(--ink-soft); }
 .popup-intro dt { color: var(--ink-soft); }
 .popup-intro dd { margin: 0; overflow-wrap: anywhere; }
 

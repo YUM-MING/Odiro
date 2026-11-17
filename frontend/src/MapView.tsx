@@ -167,6 +167,7 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect, da
               )}
             </dl>
           )}
+          {sel.intro && <div className="popup-credit">출처 : ⓒ한국관광공사</div>}
           {showParking && (
             <div className="popup-parking">
               <span aria-hidden="true">🅿</span> {sel.parking ? `근처 주차장 ${sel.parking}` : '근처 주차장 정보가 없어요'}

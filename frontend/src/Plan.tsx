@@ -523,6 +523,7 @@ export default function Plan() {
                                         <span>1인 약 {p.est_cost.toLocaleString('ko-KR')}원</span>
                                       </span>
                                     )}
+                                    {p.intro && <span className="pc-credit">출처 : ⓒ한국관광공사</span>}
                                     {/* 카드는 코스의 흐름(순서·시간·이유·비용·태그). 리뷰 요약·주소·주차장·링크는 지도 정보 창(MapView) */}
                                     {p.tags.length > 0 && (
                                       <span className="chips">
@@ -618,6 +619,7 @@ export default function Plan() {
               <I.Send size={18} />
             </button>
           </form>
+          <p className="credit">출처 : ⓒ한국관광공사</p>
         </aside>
 
         <main className="right">
