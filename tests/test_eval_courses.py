@@ -31,9 +31,15 @@ def test_clean_course():
 
 
 def test_unverified_detected():
-    places = [_p(1, "a", "식당"), _p(2, "b", "카페", pid=""), _p(3, "c", "관광지", verified=False)]
+    places = [_p(1, "a", "식당"), _p(2, "b", "카페", lat=0), _p(3, "c", "관광지", verified=False)]
     m = ev.evaluate(_resp(places), CENTER, 1500)
     assert m["unverified"] == 2 and m["unverified_names"] == ["b", "c"]
+
+
+def test_missing_kakao_id_is_not_unverified():
+    # TourAPI 큐레이션 장소는 카카오 ID 없이 verified=True 로 들어간다 → 미확인으로 세지 않는다
+    m = ev.evaluate(_resp([_p(1, "a", "관광지", pid=""), _p(2, "b", "식당"), _p(3, "c", "카페")]), CENTER, 1500)
+    assert m["unverified"] == 0
 
 
 def test_outside_radius_ratio():

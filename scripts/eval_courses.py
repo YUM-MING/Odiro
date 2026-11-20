@@ -1,7 +1,7 @@
 """코스 품질 평가: 시나리오 10개를 실제로 돌려 지표를 표로 만든다 (품질 작업의 전후 비교용).
 
 지표
-- 미확인: 지도 확인이 안 된 장소 수 (verified 아님 · 카카오 장소 ID 없음 · 좌표 없음). 항상 0 이어야 한다
+- 미확인: 지도 확인이 안 된 장소 수 (verified 아님 · 좌표 없음. 카카오 장소 ID 는 보지 않는다: TourAPI 큐레이션 장소는 ID 없이 들어가도 된다). 항상 0 이어야 한다
 - 반경밖: 지역 중심에서 파이프라인이 쓰는 반경(뚜벅이 1.5km · 자차 동네 8km · 자차 시군구 30km)을 넘은 장소 비율
 - 구성: 날짜별 식당·카페·볼거리(관광지·놀거리·산책·쇼핑·기타) 수. 식당·카페가 하루에 하나라도 없으면 '구성 미흡'
 - 시간: 코스 생성에 걸린 시간(초). 항상 캐시 없이 새로 만든다
@@ -84,7 +84,8 @@ SCENARIOS: dict[str, dict[str, Any]] = {
 
 
 def is_unverified(p: Any) -> bool:
-    return not (p.verified and p.kakao_place_id and p.lat and p.lng)
+    # 카카오 ID 는 보지 않는다. 빈 자리를 채우는 TourAPI 큐레이션 장소는 공식 데이터라 ID·카카오 확인 없이 verified=True 로 들어간다
+    return not (p.verified and p.lat and p.lng)
 
 
 def composition(places: list[Any]) -> dict[int, dict[str, int]]:
