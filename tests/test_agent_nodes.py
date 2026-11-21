@@ -384,6 +384,31 @@ def test_day_starts_override_start_time_per_day(monkeypatch):
     assert first == {1: "09:00", 2: "11:00"}  # 지정하지 않은 날은 기존 시작 시각
 
 
+def test_route_drops_last_places_when_past_end_time(monkeypatch):
+    _fake_route(monkeypatch)
+    places = [_p("A", lat=37.50), _p("B", "카페", lat=37.501), _p("C", lat=37.502), _p("D", "식당", lat=37.503), _p("호텔", "숙소", lat=37.504)]
+    req = {"transport": "car", "start_time": "11:00", "end_time": "15:00"}
+    out = nodes.optimize_route({"request": req, "verified": places, "trace": [], "warnings": []})
+    body = [p for p in out["places"] if p["category"] != "숙소"]
+    assert 2 <= len(body) < 4
+    assert out["places"][-1]["category"] == "숙소"
+    last = body[-1]
+    assert nodes._hhmm_to_min(last["arrive"]) + last["stay_min"] <= nodes._hhmm_to_min("15:00")  # 숙소 체류는 계산에서 제외
+    assert len(out["legs"]) == len(out["places"]) - 1
+    assert any("뺐어요" in w for w in out["warnings"])
+
+
+def test_route_lodging_stay_not_counted_and_no_midnight_wrap(monkeypatch):
+    _fake_route(monkeypatch)
+    places = [_p("A", lat=37.50), _p("B", "카페", lat=37.501), _p("호텔", "숙소", lat=37.502)]
+    req = {"transport": "car", "start_time": "21:00", "end_time": "23:59"}
+    out = nodes.optimize_route({"request": req, "verified": places, "trace": [], "warnings": []})
+    assert len(out["places"]) == 3 and not out["warnings"]  # 숙소 60분을 더해도 경고가 없어야 한다
+    late = _p("A", lat=37.50, stay_min=180), _p("B", "카페", lat=37.501, stay_min=180)
+    out = nodes.optimize_route({"request": {**req, "start_time": "21:00", "end_time": "22:00"}, "verified": list(late), "trace": [], "warnings": []})
+    assert any("종료 시각" in w for w in out["warnings"])  # 24시를 넘겨도 경고가 나온다
+
+
 def test_modify_time_only_edit_updates_request_and_skips_swap(monkeypatch):
     plan = nodes.EditPlan(target_number=0, schedule_only=True, time_changes=[nodes.TimeChange(day=1, start_time="09:00")])
 

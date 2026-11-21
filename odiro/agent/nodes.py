@@ -33,6 +33,7 @@ MAX_VERIFY_ROUNDS = 1  # 예비 후보(spares)로 먼저 채우고, 그래도 �
 MAX_PLACES_PER_DAY = 6
 MAX_PLACES_PER_DAY_TRIP = 5
 MIN_PLACES_PER_DAY = 3
+SLOT_MIN = 105  # 장소 하나당 평균 소요(체류 60~90분 + 이동)
 SPARES_PER_DAY = 3
 VERIFY_RADIUS = {"walk": 1500, "car": 30000}
 # 카카오 카테고리 대분류 중 코스 장소가 될 수 없는 것 (이름이 완전히 같으면 예외)
@@ -188,7 +189,7 @@ def _places_per_day(req: dict[str, Any]) -> int:
         hours = max(2.0, (eh * 60 + em - sh * 60 - sm) / 60)
     except ValueError:
         hours = 8.0
-    n = round(hours / 1.8)
+    n = int(hours * 60 // SLOT_MIN)  # 올림하면 종료 시각을 넘기기 쉬워 내림한다
     cap = MAX_PLACES_PER_DAY_TRIP if req.get("mode") == "trip" else MAX_PLACES_PER_DAY
     return max(MIN_PLACES_PER_DAY, min(cap, n))
 
@@ -1457,6 +1458,16 @@ def _hhmm_add(hhmm: str, minutes: int) -> str:
     return t.strftime("%H:%M")
 
 
+def _hhmm_to_min(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _min_to_hhmm(minutes: int) -> str:
+    """분 → 'HH:MM'. 자정을 넘기면 24:30 처럼 이어서 표기 (0시로 되돌리지 않는다)."""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
 def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
     t0 = _now_ms()
     req = state["request"]
@@ -1477,24 +1488,54 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
             ordered = _day_sequence(body) + [p for p in ordered if p.get("category") == "숙소"]
         prev_stay = next((p for p in ordered if p.get("category") == "숙소"), prev_stay)
         offset = len(places)
-        pairs = list(itertools.pairwise(ordered))
-        with ThreadPoolExecutor(max_workers=6) as ex:
-            day_legs = list(ex.map(lambda ab: get_route.route(ab[0]["lat"], ab[0]["lng"], ab[1]["lat"], ab[1]["lng"], transport), pairs))
         starts = req.get("day_starts") or {}
-        clock = starts.get(day) or starts.get(str(day)) or req.get("start_time", "11:00")
+        start_hhmm = starts.get(day) or starts.get(str(day)) or req.get("start_time", "11:00")
+        end_hhmm = req.get("end_time", "23:59")
+        route_cache: dict[tuple[int, int], dict[str, Any]] = {}
+
+        def fetch_legs(seq: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            todo = [(a, b) for a, b in itertools.pairwise(seq) if (id(a), id(b)) not in route_cache]
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                got = list(ex.map(lambda ab: get_route.route(ab[0]["lat"], ab[0]["lng"], ab[1]["lat"], ab[1]["lng"], transport), todo))
+            for (a, b), leg in zip(todo, got):
+                route_cache[(id(a), id(b))] = leg
+            return [route_cache[(id(a), id(b))] for a, b in itertools.pairwise(seq)]
+
+        def timeline(seq: list[dict[str, Any]], seq_legs: list[dict[str, Any]]) -> tuple[list[int], int]:
+            """분 단위(자정 넘김 없음) 도착 시각들과, 숙소를 뺀 마지막 장소가 끝나는 시각."""
+            t = _hhmm_to_min(start_hhmm)
+            arrives, body_end = [], t
+            for i, p in enumerate(seq):
+                arrives.append(t)
+                t += int(p.get("stay_min", 60))
+                if p.get("category") != "숙소":
+                    body_end = t
+                if i < len(seq_legs):
+                    t += seq_legs[i]["duration_min"]
+            return arrives, body_end
+
+        day_legs = fetch_legs(ordered)
+        arrives, body_end = timeline(ordered, day_legs)
+        limit = _hhmm_to_min(end_hhmm)
+        dropped: list[str] = []
+        # 종료 시각을 넘기면 숙소를 뺀 마지막 장소부터 덜어낸다 (최소 2곳은 남긴다)
+        while body_end > limit and sum(1 for p in ordered if p.get("category") != "숙소") > 2:
+            idx = max(i for i, p in enumerate(ordered) if p.get("category") != "숙소")
+            dropped.append(ordered[idx]["name"])
+            ordered = ordered[:idx] + ordered[idx + 1:]
+            day_legs = fetch_legs(ordered)
+            arrives, body_end = timeline(ordered, day_legs)
+        if dropped:
+            warnings.append(f"Day {day} 일정이 종료 시각({end_hhmm})을 넘어 {', '.join(dropped)}을(를) 뺐어요")
+        if body_end > limit:
+            warnings.append(f"Day {day} 일정이 종료 시각({end_hhmm})을 넘겨요 ({_min_to_hhmm(body_end)} 끝). 체류 시간을 줄여보세요")
         for i, p in enumerate(ordered):
-            p = {**p, "order": i + 1, "day": day, "arrive": clock}
-            places.append(p)
+            places.append({**p, "order": i + 1, "day": day, "arrive": _min_to_hhmm(arrives[i])})
             if i < len(day_legs):
                 leg = day_legs[i]
                 legs.append({"from_idx": offset + i, "to_idx": offset + i + 1, **{k: leg[k] for k in ("transport", "duration_min", "distance_m", "polyline", "estimated")}})
-                clock = _hhmm_add(clock, int(p.get("stay_min", 60)) + leg["duration_min"])
                 if leg["estimated"] and leg["transport"] != "transit":
                     warnings.append(f"Day {day} {i + 1}→{i + 2} 구간은 길찾기 실패로 직선거리 추정")
-            else:
-                clock = _hhmm_add(clock, int(p.get("stay_min", 60)))
-        if clock > req.get("end_time", "23:59") and places:
-            warnings.append(f"Day {day} 일정이 종료 시각({req.get('end_time')})을 넘겨요 ({clock} 끝). 체류 시간을 줄여보세요")
     total_min = sum(leg["duration_min"] for leg in legs)
     detail = f"{len(places)}곳 {len(legs)}구간, 이동 총 {total_min}분"
     return {

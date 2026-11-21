@@ -6,6 +6,7 @@
 - 구성: 날짜별 식당·카페·볼거리(관광지·놀거리·산책·쇼핑·기타) 수. 식당·카페가 하루에 하나라도 없으면 '구성 미흡'
 - 시간: 코스 생성에 걸린 시간(초). 항상 캐시 없이 새로 만든다
 - 예산: 1인 예상 비용 합계가 예산을 넘었는지
+- 종료초과: 날짜별로 숙소를 뺀 마지막 장소가 끝나는 시각(도착+체류)이 end_time 을 넘은 분(分). 항상 0 이어야 한다
 
 실행 (LLM·지도 API 를 실제로 호출하므로 시나리오 1개당 약 30~60초, 비용이 든다):
     python scripts/eval_courses.py                       # 전체 10개, 결과 저장
@@ -99,6 +100,27 @@ def composition(places: list[Any]) -> dict[int, dict[str, int]]:
     return days
 
 
+def _to_min(hhmm: str) -> int | None:
+    try:
+        h, m = hhmm.split(":")
+        return int(h) * 60 + int(m)
+    except ValueError:
+        return None
+
+
+def overtime(places: list[Any], end_time: str) -> dict[int, int]:
+    """날짜별 종료 시각 초과 분. 숙소는 제외하고 그날 마지막 장소가 끝나는 시각(도착+체류)으로 잰다. 초과한 날만 담는다."""
+    limit = _to_min(end_time)
+    if limit is None:
+        return {}
+    ends: dict[int, int] = {}
+    for p in places:
+        arrive = _to_min(p.arrive) if p.category != STAY else None
+        if arrive is not None:
+            ends[p.day] = max(ends.get(p.day, 0), arrive + p.stay_min)
+    return {d: e - limit for d, e in sorted(ends.items()) if e > limit}
+
+
 def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int) -> dict[str, Any]:
     places = resp.places
     unverified = [p.name for p in places if is_unverified(p)]
@@ -111,6 +133,7 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
     comp = composition(places)
     lacking = [d for d, c in comp.items() if c[EAT] == 0 or c[CAFE] == 0]
     budget_total = resp.request.budget
+    over = overtime(places, resp.request.end_time)
     return {
         "places": len(places),
         "unverified": len(unverified),
@@ -121,6 +144,8 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
         "comp": {str(d): c for d, c in sorted(comp.items())},
         "comp_ok": bool(comp) and not lacking,
         "days_lacking": lacking,
+        "overtime": {str(d): m for d, m in over.items()},
+        "overtime_max_min": max(over.values(), default=0),
         "est_cost": resp.meta.est_cost_total,
         "over_budget": resp.meta.est_cost_total > budget_total,
         "weather": ("비" if resp.meta.weather.rain else resp.meta.weather.summary or "예보없음"),
@@ -134,16 +159,17 @@ def comp_text(comp: dict[str, dict[str, int]]) -> str:
 
 
 def render_table(results: dict[str, dict[str, Any]]) -> str:
-    head = "| 시나리오 | 장소 | 미확인 | 반경밖 | 구성(식당·카페·볼거리) | 예산 | 날씨 | 경고 | 시간(초) |\n|---|---|---|---|---|---|---|---|---|\n"
+    head = "| 시나리오 | 장소 | 미확인 | 반경밖 | 구성(식당·카페·볼거리) | 예산 | 종료초과 | 날씨 | 경고 | 시간(초) |\n|---|---|---|---|---|---|---|---|---|---|\n"
     rows = []
     for key, m in results.items():
         if m.get("error"):
-            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | {m.get('elapsed_s', '')} |")
+            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | | {m.get('elapsed_s', '')} |")
             continue
         comp = comp_text(m["comp"]) + ("" if m["comp_ok"] else " ⚠구성 미흡")
         out = f"{m['outside']}/{m['places']} ({m['outside_ratio']:.0%})"
         budget = "초과" if m["over_budget"] else "ok"
-        rows.append(f"| {key} | {m['places']} | {m['unverified']} | {out} | {comp} | {budget} | {m['weather']} | {m['warnings']} | {m['elapsed_s']} |")
+        late = "ok" if not m.get("overtime_max_min") else ", ".join(f"D{d} +{v}분" for d, v in m["overtime"].items())
+        rows.append(f"| {key} | {m['places']} | {m['unverified']} | {out} | {comp} | {budget} | {late} | {m['weather']} | {m['warnings']} | {m['elapsed_s']} |")
     ok = [m for m in results.values() if not m.get("error")]
     if ok:
         n_places = sum(m["places"] for m in ok)
@@ -152,7 +178,7 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
         rows.append(
             f"| **합계/평균** ({len(ok)}/{len(results)} 성공) | {n_places} | **{sum(m['unverified'] for m in ok)}** | "
             f"{n_out}/{n_places} ({(n_out / n_places if n_places else 0):.0%}) | 구성 미흡 {sum(not m['comp_ok'] for m in ok)}건 | "
-            f"초과 {sum(m['over_budget'] for m in ok)}건 | | {sum(m['warnings'] for m in ok)} | "
+            f"초과 {sum(m['over_budget'] for m in ok)}건 | {sum(bool(m.get('overtime_max_min')) for m in ok)}건 | | {sum(m['warnings'] for m in ok)} | "
             f"평균 {sum(times) / len(times):.1f} · 최대 {times[-1]} |"
         )
     return head + "\n".join(rows)
@@ -160,7 +186,7 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
 
 def render_compare(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]]) -> str:
     """같은 시나리오끼리 핵심 지표를 전 → 후로 나란히."""
-    lines = ["| 시나리오 | 미확인 | 반경밖 비율 | 구성 미흡 | 예산 초과 | 시간(초) |", "|---|---|---|---|---|---|"]
+    lines = ["| 시나리오 | 미확인 | 반경밖 비율 | 구성 미흡 | 예산 초과 | 종료초과(분) | 시간(초) |", "|---|---|---|---|---|---|---|"]
 
     def arrow(a: Any, b: Any, fmt: str = "{}") -> str:
         return fmt.format(a) if a == b else f"{fmt.format(a)} → {fmt.format(b)}"
@@ -168,12 +194,12 @@ def render_compare(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]
     for key, n in new.items():
         o = old.get(key)
         if not o or o.get("error") or n.get("error"):
-            lines.append(f"| {key} | (비교 불가) | | | | |")
+            lines.append(f"| {key} | (비교 불가) | | | | | |")
             continue
         lines.append(
             f"| {key} | {arrow(o['unverified'], n['unverified'])} | {arrow(o['outside_ratio'], n['outside_ratio'], '{:.0%}')} | "
             f"{arrow(not o['comp_ok'], not n['comp_ok'])} | {arrow(o['over_budget'], n['over_budget'])} | "
-            f"{arrow(o['elapsed_s'], n['elapsed_s'])} |"
+            f"{arrow(o.get('overtime_max_min', '-'), n.get('overtime_max_min', 0))} | {arrow(o['elapsed_s'], n['elapsed_s'])} |"
         )
     return "\n".join(lines)
 
@@ -223,7 +249,7 @@ def main() -> None:
         print(f"[{i}/{len(args.only)}] {key} ...", flush=True)
         results[key] = run_scenario(key, args.date)
         m = results[key]
-        print("   ", f"실패 {m['error']}" if m.get("error") else f"{m['places']}곳 {m['elapsed_s']}s 미확인 {m['unverified']} 반경밖 {m['outside']}", flush=True)
+        print("   ", f"실패 {m['error']}" if m.get("error") else f"{m['places']}곳 {m['elapsed_s']}s 미확인 {m['unverified']} 반경밖 {m['outside']} 종료초과 {m['overtime_max_min']}분", flush=True)
 
     table = render_table(results)
     out = f"## 코스 평가 ({datetime.now():%Y-%m-%d %H:%M}, 출발일 {args.date}, {len(results)}개)\n\n{table}\n"
