@@ -399,3 +399,97 @@ def test_modify_time_only_edit_updates_request_and_skips_swap(monkeypatch):
     out = nodes.modify({"request": {"days": 1, "mode": "outing"}, "conditions": "", "places": places, "instruction": "첫째날 9시에 시작하게 바꿔줘", "trace": []})
     assert out["time_only"] and out["request"]["day_starts"] == {1: "09:00"}
     assert [p["name"] for p in out["verified"]] == ["A", "B"]  # 장소는 그대로
+
+
+def _fake_chat(monkeypatch, result):
+    class FakeChat:
+        def with_structured_output(self, _):
+            return self
+
+        def invoke(self, _):
+            return result
+
+    monkeypatch.setattr(nodes, "chat", lambda *_: FakeChat())
+
+
+def test_extract_moods_keeps_only_tags_whose_phrase_is_in_the_text(monkeypatch):
+    _fake_chat(monkeypatch, nodes.MoodTags(moods=[nodes.MoodHit(phrase="조용한", tag="감성/조용한"), nodes.MoodHit(phrase="카공", tag="감성/조용한"), nodes.MoodHit(phrase="레트로", tag="레트로"), nodes.MoodHit(phrase="핫플", tag="힙한/트렌디")]))
+    assert nodes._extract_moods("조용한 카공 카페") == ["감성/조용한"]  # 레트로·핫플은 문장에 근거 표현이 없어 버린다
+
+
+def test_extract_moods_returns_empty_on_llm_failure(monkeypatch):
+    class Boom:
+        def with_structured_output(self, _):
+            raise RuntimeError("down")
+
+    monkeypatch.setattr(nodes, "chat", lambda *_: Boom())
+    assert nodes._extract_moods("조용한 카페") == []
+    assert nodes._extract_moods("") == []
+
+
+def test_modify_searches_rag_with_moods_from_instruction(monkeypatch):
+    calls = []
+    monkeypatch.setattr(nodes.rag, "search", lambda q, **kw: calls.append(kw) or [])
+    monkeypatch.setattr(nodes, "_extract_moods", lambda text: ["감성/조용한"])
+    _fake_chat(monkeypatch, nodes.EditPlan(target_number=0, place=None))
+    places = [_p("A", verified=True), _p("B", "카페", order=2, verified=True)]
+    nodes.modify({"request": {"region": "성수동", "days": 1, "mode": "outing"}, "conditions": "", "places": places, "instruction": "조용한 카페로 바꿔줘", "trace": []})
+    assert calls and all(c["moods"] == ["감성/조용한"] for c in calls)
+
+
+def _poi(name, group="CE7"):
+    return {"name": name, "category_group": group, "lat": 37.5, "lng": 127.0}
+
+
+def _blog(title, tags=(), one_line=""):
+    return {"doc_id": title, "doc_type": "blog", "title": title, "snippet": "", "tags": list(tags), "one_line": one_line}
+
+
+def test_rank_pois_lifts_blog_backed_cafes_and_keeps_distance_order_otherwise():
+    pois = [_poi("가까운카페집"), _poi("천상가옥 성수점"), _poi("먼카페집"), _poi("단일서울")]
+    docs = [_blog("성수동 카페 천상가옥 후기", ["감성/조용한"], "조용하고 아늑한 한옥 카페"), _blog("단일서울 다녀왔어요", [], "넓은 카페")]
+    out = nodes._rank_pois_by_blogs(pois, docs, ["감성/조용한"])
+    assert [p["name"] for p in out] == ["천상가옥 성수점", "단일서울", "가까운카페집", "먼카페집"]  # 태그까지 맞는 곳 > 언급만 > 근거 없음(거리순)
+    assert out[0]["blog_mentions"] == 1 and out[0]["blog_hint"] == "조용하고 아늑한 한옥 카페"
+    assert "blog_mentions" not in out[2]
+
+
+def test_rank_pois_sorts_within_group_only_and_ignores_generic_names():
+    pois = [_poi("가까운식당", "FD6"), _poi("송도맛집", "FD6"), _poi("카페", "CE7"), _poi("어니언", "CE7")]
+    docs = [_blog("송도맛집 추천 카페 어니언 후기")]
+    out = nodes._rank_pois_by_blogs(pois, docs, [])
+    assert [p["name"] for p in out] == ["가까운식당", "송도맛집", "어니언", "카페"]  # 식당 그룹이 먼저, 일반 명사형 상호('송도맛집','카페')는 근거로 안 친다
+
+
+def test_fmt_pois_shows_blog_hint():
+    text = nodes._fmt_pois([{"name": "천상가옥", "category_full": "음식점 > 카페", "address": "성수", "blog_mentions": 2, "blog_hint": "아늑한 한옥"}, _poi("그냥카페")])
+    assert "★블로그 언급 2건: 아늑한 한옥" in text and text.count("★") == 1
+
+
+def _blog_cafe_setup(monkeypatch, items, hits_by_name):
+    _fake_chat(monkeypatch, nodes.BlogCafes(items=items))
+    monkeypatch.setattr(nodes.search_place, "search", lambda q, *a, **k: hits_by_name.get(q.split(" ", 1)[1], []))
+    center = {"lat": 37.5446, "lng": 127.0557}
+    docs = [_blog("성수동 카페 천상가옥 후기", ["감성/조용한"], "아늑한 한옥 카페"), _blog("성수 카페 프랙티커피 추천", ["감성/조용한"], "조용한 로스터리"), _blog("무관한 글 서브젝티브", ["힙한/트렌디"])]
+    return center, [{**d, "doc_id": d["title"]} for d in docs]
+
+
+def _cafe(name, dist_deg, pid):
+    return {"name": name, "category_group": "CE7", "lat": 37.5446 + dist_deg, "lng": 127.0557, "kakao_place_id": pid}
+
+
+def test_blog_backed_cafes_walk_keeps_only_within_800m(monkeypatch):
+    items = [nodes.BlogCafe(name="천상가옥", doc=0), nodes.BlogCafe(name="프랙티커피", doc=1)]
+    hits = {"천상가옥": [_cafe("천상가옥", 0.0108, "1")], "프랙티커피": [_cafe("프랙티커피", 0.0050, "2")]}  # 0.0108° ≈ 1.2km, 0.0050° ≈ 556m
+    center, docs = _blog_cafe_setup(monkeypatch, items, hits)
+    out = nodes._blog_backed_cafes({"region": "성수동", "transport": "walk"}, center, docs, ["감성/조용한"], 1500, set())
+    assert [p["name"] for p in out] == ["프랙티커피"] and out[0]["blog_hint"] == "조용한 로스터리"
+    car = nodes._blog_backed_cafes({"region": "성수동", "transport": "car"}, center, docs, ["감성/조용한"], 8000, set())
+    assert [p["name"] for p in car] == ["프랙티커피", "천상가옥"]  # 자차는 800m 제한 없이 가까운 순
+
+
+def test_blog_backed_cafes_drops_invented_names_and_non_cafes_and_taken(monkeypatch):
+    items = [nodes.BlogCafe(name="없는카페", doc=0), nodes.BlogCafe(name="천상가옥", doc=0), nodes.BlogCafe(name="프랙티커피", doc=1)]
+    hits = {"없는카페": [_cafe("없는카페", 0.001, "9")], "천상가옥": [{**_cafe("천상가옥", 0.001, "1"), "category_group": "FD6"}], "프랙티커피": [_cafe("프랙티커피", 0.001, "2")]}
+    center, docs = _blog_cafe_setup(monkeypatch, items, hits)
+    assert nodes._blog_backed_cafes({"region": "성수동", "transport": "walk"}, center, docs, ["감성/조용한"], 1500, {"2"}) == []  # 제목에 없는 상호·식당·이미 있는 곳은 모두 제외

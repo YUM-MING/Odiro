@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from odiro.agent.llm import chat
 from odiro.api.schemas import MOODS
+from odiro.config import settings
 from odiro.tools import get_route, get_sun_times, get_weather, search_place, summarize_reviews
 from odiro.tools import rag_search as rag
 from odiro.tools._util import haversine_m
@@ -81,8 +82,49 @@ class MustHave(BaseModel):
         default_factory=list,
         description="자유 조건이 '특정 종류의 장소·체험' 을 원할 때 그것을 지도 앱에서 찾을 검색어 1~3개 (짧은 업종명, 지역명 제외). "
         "예) '반지공방' → ['반지공방', '커플링공방'] / '비건 메뉴 꼭' → ['비건식당'] / '보드게임 하고 싶어' → ['보드게임카페']. "
-        "장소 종류가 아닌 조건(주차 편한 곳, 조용하게, 많이 안 걷게)은 빈 목록",
+        "장소 종류가 아닌 조건(주차 편한 곳, 조용하게, 많이 안 걷게)은 빈 목록. "
+        "분위기·성격 수식어가 붙은 평범한 카페·식당('조용한 카페', '분위기 좋은 식당', '뷰 좋은 카페')도 빈 목록 — 분위기는 따로 태그로 처리하고 카페·식당은 코스에 원래 들어간다. "
+        "특별한 업종(공방·보드게임카페·키즈카페·스터디카페·비건식당)일 때만 채운다",
     )
+
+
+MOOD_MODEL = "gpt-4o"  # 분위기 태그 변환 전용: gpt-4o-mini 는 문장에 없는 태그를 갖다 붙인다 (11/21 확인). 호출이 짧아 비용은 미미
+MoodTag = Literal[MOODS]  # type: ignore[valid-type]  # 자유 단어('차분한')가 아니라 태그 11개 중에서만 고르게 스키마로 막는다
+
+
+MOOD_GUIDE = """태그와 뜻:
+- 감성/조용한: 조용한, 한적한, 잔잔한, 아늑한, 차분한, 카공(공부·작업하기 좋은)
+- 힙한/트렌디: 핫플, 요즘 뜨는, 힙한, 트렌디한
+- 뷰맛집/일몰: 뷰가 좋은, 전망, 노을·일몰, 야경
+- 레트로: 옛날 감성, 레트로, 빈티지
+- 자연/산책: 자연, 산책, 공원, 숲, 걷기 좋은
+- 실내(비오는날): 실내, 비 오는 날
+- 액티비티: 몸으로 하는 체험·활동
+- 사진맛집: 사진 찍기 좋은, 포토스팟
+- 웨이팅적은: 줄 안 서는, 웨이팅 없는, 한산한, 사람 적은
+- 아이동반: 아이와 함께, 키즈
+- 반려동물: 강아지·반려동물 동반"""
+
+
+class MoodHit(BaseModel):
+    phrase: str = Field(description="태그의 근거가 되는 표현을 문장에서 **글자 그대로** 인용 (문장에 없는 말은 쓸 수 없다)")
+    tag: MoodTag
+
+
+class MoodTags(BaseModel):
+    moods: list[MoodHit] = Field(
+        default_factory=list,
+        description="문장에 직접 드러난 분위기·성격만, 최대 2개. 장소 종류·메뉴·예산·시간·'N번째 바꿔줘' 같은 요구는 태그가 아니다. 해당 없거나 확실하지 않으면 빈 목록",
+    )
+
+
+class BlogCafe(BaseModel):
+    name: str = Field(description="블로그 제목에 적힌 카페 상호 그대로 (지역명·수식어 제외). 예) '성수동 카페 천상가옥, 핫한…' → '천상가옥'")
+    doc: int = Field(description="그 상호가 나온 제목의 번호")
+
+
+class BlogCafes(BaseModel):
+    items: list[BlogCafe] = Field(default_factory=list, description="제목에 카페 상호가 분명히 나온 것만. 여러 곳을 소개하는 글·상호가 없는 글은 제외")
 
 
 class TimeChange(BaseModel):
@@ -163,8 +205,106 @@ def _fmt_rag_docs(docs: list[dict[str, Any]], limit: int = 20) -> str:
 
 def _fmt_pois(pois: list[dict[str, Any]]) -> str:
     return "\n".join(
-        f"- {p['name']} ({p.get('category_full', '').split(' > ')[-1] or p.get('category')}, {p.get('address', '')})" for p in pois
+        f"- {p['name']} ({p.get('category_full', '').split(' > ')[-1] or p.get('category')}, {p.get('address', '')})"
+        + (f" ★블로그 언급 {p['blog_mentions']}건: {p['blog_hint']}" if p.get("blog_mentions") else "")
+        for p in pois
     ) or "- (없음)"
+
+
+POI_PER_GROUP = 8  # 카카오 후보를 LLM 에 넘기는 개수 (식당·카페 각각)
+POI_FETCH = 15  # 재정렬 전에 카카오에서 가져오는 개수
+
+
+def _poi_mentioned(name: str, text: str) -> bool:
+    """블로그 글이 그 상호를 언급하는지. '송도맛집'·'○○카페' 같은 일반 명사형 상호는 아무 글에나 걸리므로 제외한다."""
+    head = search_place._norm_name(name.split()[0]) if name.split() else ""
+    if len(head) < 3 or head.endswith(("맛집", "카페", "식당")):
+        return False
+    return summarize_reviews.mentions(name, text)
+
+
+BLOG_CAFE_WALK_M = 800  # 뚜벅이: 블로그 근거 카페를 우선하되 지역 중심에서 이 거리 안쪽만 (11/21 결정)
+BLOG_CAFE_MAX = 4  # 블로그 근거 카페로 올리는 최대 개수 (나머지 자리는 가까운 카페로 유지)
+
+
+def _blog_backed_cafes(
+    req: dict[str, Any], center: dict[str, Any], docs: list[dict[str, Any]], moods: list[str], radius: int, taken: set[str],
+) -> list[dict[str, Any]]:
+    """분위기 태그가 붙은 블로그 제목에서 카페 상호를 뽑아 카카오에서 찾는다 → 근거가 있는 실존 카페 후보.
+
+    카카오 '근처 카페' 상위 목록에는 블로그가 말하는 카페가 거의 안 들어오므로(거리순이라서), 이름으로 따로 찾아 온다.
+    거리 상한: 뚜벅이 800m, 자차는 radius. 제목에 없는 상호는 LLM 이 지어낸 것으로 보고 버린다.
+    """
+    want = set(moods)
+    seen: set[str] = set()
+    titles: list[dict[str, Any]] = []
+    for d in docs:
+        if d.get("doc_type") == "blog" and want & set(d.get("tags") or []) and d.get("doc_id") not in seen and d.get("title"):
+            seen.add(d["doc_id"])
+            titles.append(d)
+    titles = titles[:20]
+    if not titles or not center:
+        return []
+    try:
+        res = chat(0).with_structured_output(BlogCafes).invoke([
+            ("system", "블로그 글 제목에서 카페 상호를 뽑습니다. 제목에 상호가 분명히 적힌 것만 뽑고, 짐작하지 않습니다."),
+            ("human", "\n".join(f"{i}. {d['title']}" for i, d in enumerate(titles))),
+        ])
+        items = getattr(res, "items", None) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("블로그 카페 상호 추출 실패: %s", e)
+        return []
+    squeeze = lambda t: re.sub(r"\s+", "", t or "").lower()  # noqa: E731
+    named: dict[str, dict[str, Any]] = {}
+    for it in items:
+        if 0 <= it.doc < len(titles) and squeeze(it.name) and squeeze(it.name) in squeeze(titles[it.doc]["title"]):
+            named.setdefault(squeeze(it.name), {"name": it.name.strip(), "doc": titles[it.doc]})
+    limit = min(radius, BLOG_CAFE_WALK_M) if req.get("transport") == "walk" else radius
+
+    def lookup(n: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            hits = search_place.search(f"{req['region']} {n['name']}", center["lat"], center["lng"], radius, size=5)
+        except Exception as e:  # noqa: BLE001
+            log.debug("블로그 카페 검색 실패 %s: %s", n["name"], e)
+            return None
+        for h in hits:
+            near = squeeze(n["name"]) in squeeze(h["name"]) or squeeze(h["name"]) in squeeze(n["name"])
+            if h.get("category_group") == "CE7" and near and h.get("kakao_place_id") not in taken:
+                if haversine_m(center["lat"], center["lng"], h["lat"], h["lng"]) <= limit:
+                    return {**h, "blog_mentions": 1, "blog_hint": str(n["doc"].get("one_line") or "")}
+        return None
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        found = [p for p in ex.map(lookup, list(named.values())) if p]
+    if not _chains_allowed(req):
+        found = [p for p in found if not _is_chain(p["name"])]
+    found.sort(key=lambda p: haversine_m(center["lat"], center["lng"], p["lat"], p["lng"]))
+    return found[:BLOG_CAFE_MAX]
+
+
+def _rank_pois_by_blogs(pois: list[dict[str, Any]], docs: list[dict[str, Any]], moods: list[str]) -> list[dict[str, Any]]:
+    """카카오 후보(거리순)를 블로그 근거가 있는 곳 위로 올린다. 카카오는 분위기를 모르므로 RAG 블로그가 분위기의 유일한 근거다.
+
+    점수: 상호를 언급한 글마다 +1, 그 글에 사용자가 원한 분위기 태그가 붙어 있으면 +2. 같은 점수끼리는 원래(거리) 순서를 지킨다.
+    근거 글이 있으면 blog_mentions·blog_hint(그 글의 한 줄 요약)를 달아 LLM 이 reason 을 지어내지 않고 이걸 쓰게 한다.
+    """
+    want = set(moods)
+    scored: list[tuple[int, int, dict[str, Any]]] = []  # (그룹 순서, -점수, 후보) → 그룹(식당/카페) 안에서만 정렬
+    groups: dict[str, int] = {}
+    for p in pois:
+        g = groups.setdefault(p.get("category_group") or "", len(groups))
+        score, count, hint = 0, 0, ""
+        for d in docs:
+            if d.get("doc_type") != "blog" or not _poi_mentioned(p["name"], f"{d.get('title') or ''} {d.get('snippet') or ''}"):
+                continue
+            count += 1
+            hit = bool(want & set(d.get("tags") or []))
+            score += 3 if hit else 1
+            if d.get("one_line") and (not hint or hit):
+                hint = str(d["one_line"])
+        scored.append((g, -score, {**p, "blog_mentions": count, "blog_hint": hint} if count else p))
+    scored.sort(key=lambda t: (t[0], t[1]))  # 안정 정렬: 점수가 같으면 입력(거리) 순서 유지
+    return [p for _, _, p in scored]
 
 
 def _weekdays_text(req: dict[str, Any]) -> str:
@@ -329,13 +469,32 @@ def _find_stays(req: dict[str, Any], center: dict[str, Any] | None) -> list[dict
     return out[:12]
 
 
+def _extract_moods(text: str) -> list[str]:
+    """자유 문장('조용한 카페로 바꿔줘') → 분위기 태그(MOODS). 태그를 직접 골랐을 때와 같은 RAG 필터를 타게 한다. 실패하면 빈 목록."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    try:
+        res = chat(0, MOOD_MODEL if settings.llm_provider == "openai" else None).with_structured_output(MoodTags).invoke(
+            [("system", "여행·데이트 코스 요청 문장에서 원하는 분위기·성격을 태그로 바꿉니다. 문장에 직접 드러난 것만 고르고, 짐작하지 않습니다. "
+                        "장소 종류(공방·카페)나 메뉴(비건)는 태그가 아니므로 무시합니다.\n" + MOOD_GUIDE), ("human", text)]
+        )
+        hits = getattr(res, "moods", None) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("분위기 태그 변환 실패: %s", e)
+        return []
+    squeezed = text.replace(" ", "")
+    # 작은 모델은 문장에 없는 분위기도 갖다 붙이므로, 근거 표현이 실제 문장에 있는 태그만 쓴다
+    return list(dict.fromkeys(h.tag for h in hits if h.tag in MOODS and h.phrase.replace(" ", "") and h.phrase.replace(" ", "") in squeezed))
+
+
 def _find_must(req: dict[str, Any], center: dict[str, Any] | None) -> tuple[list[str], list[dict[str, Any]]]:
     """자유 조건 → (지도 검색어, 그 검색어로 찾은 중심 주변 실존 장소). 장소 종류를 가리키지 않으면 ([], [])."""
     text = (req.get("free_text") or "").strip()
     if not text:
         return [], []
     try:
-        must: MustHave = chat(0).with_structured_output(MustHave).invoke(
+        must: MustHave = chat(0, MOOD_MODEL if settings.llm_provider == "openai" else None).with_structured_output(MustHave).invoke(
             [("system", "여행·데이트 코스 조건에서 '꼭 가고 싶은 장소 종류' 만 뽑아 지도 검색어로 바꿉니다."), ("human", text)]
         )
         keywords = [k.strip() for k in must.keywords if k.strip()][:3]
@@ -500,7 +659,16 @@ def parse_intent(state: dict[str, Any]) -> dict[str, Any]:
     detail = f"{req['region']} → {center['label'] if center else '?'}"
 
     # 자유 조건이 특정 종류의 장소(예: 반지공방)를 원하면 지도에서 실존 후보를 미리 찾아 둔다 → 초안·검증에서 반드시 포함
-    must_keywords, must_docs = _find_must(req, center)
+    # 같은 문장에서 분위기 태그도 뽑아 선택한 태그에 합친다 (LLM 호출이 겹치지 않게 병렬로)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_must, f_moods = ex.submit(_find_must, req, center), ex.submit(_extract_moods, req.get("free_text", ""))
+        must_keywords, must_docs = f_must.result()
+        text_moods = f_moods.result()
+    new_moods = [m for m in text_moods if m not in (req.get("moods") or [])]
+    if new_moods:
+        req = {**req, "moods": [*(req.get("moods") or []), *new_moods]}
+    if new_moods:
+        detail += f" / 자유 조건 → 분위기 태그 {new_moods}"
     if must_keywords:
         detail += f" / 꼭 넣을 곳 '{must_keywords[0]}' 후보 {len(must_docs)}곳"
         if not must_docs:
@@ -515,6 +683,7 @@ def parse_intent(state: dict[str, Any]) -> dict[str, Any]:
         else:
             warnings.append(f"숙소 '{req['lodging']}' 을(를) 지도에서 찾지 못해 근처 숙소로 대신했어요")
     return {
+        **({"request": req} if new_moods else {}),
         "must_keywords": must_keywords,
         "must_docs": must_docs,
         "user_stay": user_stay,
@@ -576,27 +745,55 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
         try:
             # 분위기 단어를 섞으면 카카오 검색이 비어 버리므로 업종 키워드만 쓴다. 분위기 판단은 LLM 이 RAG 문서로 한다.
             for q, group in (("맛집", "FD6"), ("카페", "CE7")):
-                hits = search_place.search(f"{req['region']} {q}", center["lat"], center["lng"], radius, size=15)
+                hits = search_place.search(f"{req['region']} {q}", center["lat"], center["lng"], radius, size=POI_FETCH)
                 picked = [h for h in hits if h.get("category_group", group) == group]
                 if not _chains_allowed(req):
                     picked = [h for h in picked if not _is_chain(h["name"])]
                 if _with_kids(req):  # 아이 동반: 술집은 후보에서 뺀다
                     picked = [h for h in picked if "술집" not in (h.get("category_full") or "") and "술집" not in h["name"]]
-                out += picked[:8]
+                out += picked  # 자르는 건 블로그 근거로 재정렬한 뒤에 한다 (근거 있는 곳이 9번째 이후에 있으면 버려지므로)
         except Exception as e:  # noqa: BLE001
             log.warning("poi 검색 실패: %s", e)
         return out
 
+    def do_blog_pool() -> list[dict[str, Any]]:
+        """카카오 후보의 분위기 근거를 찾을 블로그 풀. LLM 에 넘기지 않고 재정렬에만 쓴다 (넓게 뽑는다)."""
+        try:
+            tail = ' '.join(moods)
+            return rag.search(f"{req['region']} 카페 {tail}", moods=None, region=req["region"], k=30, doc_type="blog") + rag.search(
+                f"{req['region']} 맛집 식당 {tail}", moods=None, region=req["region"], k=20, doc_type="blog"
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("블로그 풀 검색 실패: %s", e)
+            return []
+
     def do_stays() -> list[dict[str, Any]]:
         return _find_stays(req, center) if _trip_days(req) > 1 else []
 
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        f_rag, f_web, f_wx, f_sun, f_poi, f_stay = (
-            ex.submit(do_rag), ex.submit(do_web), ex.submit(do_weather), ex.submit(do_sun), ex.submit(do_pois), ex.submit(do_stays)
+    with ThreadPoolExecutor(max_workers=7) as ex:
+        f_rag, f_web, f_wx, f_sun, f_poi, f_stay, f_pool = (
+            ex.submit(do_rag), ex.submit(do_web), ex.submit(do_weather), ex.submit(do_sun), ex.submit(do_pois), ex.submit(do_stays),
+            ex.submit(do_blog_pool),
         )
-        rag_docs, web_docs, weather, sun, pois, stays = (
-            f_rag.result(), f_web.result(), f_wx.result(), f_sun.result(), f_poi.result(), f_stay.result()
+        rag_docs, web_docs, weather, sun, pois, stays, blog_pool = (
+            f_rag.result(), f_web.result(), f_wx.result(), f_sun.result(), f_poi.result(), f_stay.result(), f_pool.result()
         )
+
+    # 카카오 후보를 블로그 근거(상호 언급 + 분위기 태그)가 있는 곳 위로 올린 뒤 그룹별로 자른다
+    pois = _rank_pois_by_blogs(pois, rag_docs + blog_pool, moods)
+    if moods and center:
+        taken_ids = {p.get("kakao_place_id") for p in pois}
+        backed = _blog_backed_cafes(req, center, rag_docs + blog_pool, moods, 1500 if req.get("transport") == "walk" else 8000, taken_ids)
+        pois = backed + [p for p in pois if p.get("kakao_place_id") not in {b.get("kakao_place_id") for b in backed}]
+    kept: dict[str, int] = {}
+    ranked: list[dict[str, Any]] = []
+    for p in pois:
+        g = p.get("category_group") or ""
+        if kept.get(g, 0) < POI_PER_GROUP:
+            kept[g] = kept.get(g, 0) + 1
+            ranked.append(p)
+    pois = ranked
+    n_backed = sum(1 for p in pois if p.get("blog_mentions"))
 
     warnings = list(state.get("warnings", []))
     if weather.get("rain"):
@@ -613,7 +810,7 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
             log.warning("실내 rag 실패: %s", e)
     if center:
         rag_docs = _near_center(rag_docs, center, RAG_RADIUS_M[_radius_key(req)])
-    detail = f"RAG {len(rag_docs)}건 / 웹 {len(web_docs)}건 / 주변 식당·카페 {len(pois)}곳 / 날씨 {weather.get('summary') or weather.get('note', '-')}"
+    detail = f"RAG {len(rag_docs)}건 / 웹 {len(web_docs)}건 / 주변 식당·카페 {len(pois)}곳(블로그 근거 {n_backed}곳) / 날씨 {weather.get('summary') or weather.get('note', '-')}"
     if stays:
         detail += f" / 숙소 {len(stays)}곳"
     return {
@@ -635,6 +832,8 @@ DRAFT_SYSTEM = """당신은 Odiro, 국내 여행·데이트 코스 플래너입�
    장소명은 지도 앱에 등록된 공식 명칭으로 (예: "가평레일파크", "쁘띠프랑스", "어니언 성수").
 2. **[장소 ✔지도확인]** 문서와 **"주변 실존 식당·카페"** 목록은 실존이 확인된 장소입니다. 식당·카페는 가능한 한 이 목록에서 고르고(조건에 맞는 것으로),
    source="rag" 로 표기합니다. 블로그 글에 나온 상호를 쓰면 source="rag", 웹검색은 "web", 일반 지식은 "llm".
+   목록에서 **★블로그 언급** 이 붙은 곳은 분위기 근거가 있는 곳이니 분위기·성격을 요청받으면 우선 고르고, reason 은 그 요약 내용으로만 씁니다.
+   ★ 가 없는 곳은 분위기를 알 수 없으니 '조용한'·'감성적인' 같은 성격을 단정하지 말고 업종과 위치만 담백하게 씁니다.
 3. **Day 마다 반드시 식당 1곳 이상 + 카페 1곳 이상** 을 넣고 나머지를 관광지·놀거리·산책으로 채웁니다 (나들이 뼈대 "밥 1 + 카페 1 + 놀거리 1 + α").
    식사 시간대(11:30~13:30, 17:30~19:30)에 식당이 오도록 순서를 잡습니다. category 는 실제 업종대로 (카페거리·상업시설은 '놀거리', 복합문화공간은 '관광지').
    여행 모드는 Day 별로, 마지막 Day 를 제외하고 숙소를 마지막에 둡니다.
@@ -1495,12 +1694,27 @@ def modify(state: dict[str, Any]) -> dict[str, Any]:
         target = _parse_target(instruction, places)  # "3번째", "마지막" 은 LLM 에 맡기지 않고 확정
     wx = state.get("weather") or {}
     listing = "\n".join(f"- {i + 1}번: Day{p['day']} {p['name']} ({p.get('category')}) — {p.get('reason', '')}" for i, p in enumerate(places))
+    # 수정 요청의 분위기("조용한 카페로")를 태그로 바꿔, 처음 코스를 짤 때와 같은 태그 필터로 참고 문서를 새로 찾는다
+    ref_docs = list(state.get("rag_docs", []))
+    req0 = state.get("request") or {}
+    edit_moods = [] if _mentions_clock_time(instruction) else _extract_moods(instruction)
+    if edit_moods and req0.get("region"):
+        try:
+            seen = {d["doc_id"] for d in ref_docs}
+            q = f"{req0['region']} {instruction} {' '.join(edit_moods)}"
+            found = rag.search(q, moods=edit_moods, region=req0["region"], k=5, doc_type="blog") + rag.search(
+                q, moods=edit_moods, region=req0["region"], k=3, doc_type="place"
+            )
+            ref_docs = [d for d in found if d["doc_id"] not in seen] + ref_docs
+        except Exception as e:  # noqa: BLE001
+            log.warning("수정용 rag 실패: %s", e)
     prompt = (
         f"## 조건\n{state['conditions']}"
         + (f"\n날씨: 비 예보 (강수확률 {int((wx.get('pop') or 0) * 100)}%)" if wx.get("rain") else "")
         + f"\n\n## 현재 코스\n{listing}\n\n## 수정 요청\n{instruction}"
         + (f"\n(바꿀 대상은 {target + 1}번으로 확정)" if target is not None else "")
-        + f"\n\n## 참고 문서\n{_fmt_rag_docs(state.get('rag_docs', []), 8)}"
+        + (f"\n(요청의 분위기 태그: {', '.join(edit_moods)} — 아래 참고 문서 중 이 태그가 붙은 곳을 우선해서 고르세요)" if edit_moods else "")
+        + f"\n\n## 참고 문서\n{_fmt_rag_docs(ref_docs, 8)}"
     )
     try:
         plan: EditPlan = chat(0.5).with_structured_output(EditPlan).invoke([("system", MODIFY_SYSTEM), ("human", prompt)])

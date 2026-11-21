@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from functools import lru_cache
 from typing import Any
 
@@ -28,6 +29,9 @@ from langchain_core.tools import tool
 from odiro.data.ingest import regions
 from odiro.data.ingest.build_index import TAG_KEYS, get_vectorstore
 from odiro.data.ingest.common import STATE_DIR
+
+# Chroma 클라이언트를 여러 스레드가 동시에 만들면 chromadb 가 초기화 중에 깨진다 ('RustBindingsAPI' has no attribute 'bindings') → 만드는 구간만 직렬화
+_VS_LOCK = threading.Lock()
 
 # 시도 별칭 → 법정동 코드
 _SIDO_ALIASES: dict[str, str] = {
@@ -123,7 +127,8 @@ def search(
     k: int = 5,
     doc_type: str | None = None,
 ) -> list[dict[str, Any]]:
-    vs = get_vectorstore()
+    with _VS_LOCK:
+        vs = get_vectorstore()
     where = build_filter(moods, region)
     if doc_type:
         where = {"$and": [where, {"doc_type": doc_type}]} if where else {"doc_type": doc_type}
