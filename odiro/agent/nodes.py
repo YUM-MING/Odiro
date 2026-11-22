@@ -255,7 +255,7 @@ def _blog_backed_cafes(
     except Exception as e:  # noqa: BLE001
         log.warning("블로그 카페 상호 추출 실패: %s", e)
         return []
-    squeeze = lambda t: re.sub(r"\s+", "", t or "").lower()  # noqa: E731
+    squeeze = lambda t: re.sub(r"\s+", "", t or "").lower()
     named: dict[str, dict[str, Any]] = {}
     for it in items:
         if 0 <= it.doc < len(titles) and squeeze(it.name) and squeeze(it.name) in squeeze(titles[it.doc]["title"]):
@@ -270,9 +270,13 @@ def _blog_backed_cafes(
             return None
         for h in hits:
             near = squeeze(n["name"]) in squeeze(h["name"]) or squeeze(h["name"]) in squeeze(n["name"])
-            if h.get("category_group") == "CE7" and near and h.get("kakao_place_id") not in taken:
-                if haversine_m(center["lat"], center["lng"], h["lat"], h["lng"]) <= limit:
-                    return {**h, "blog_mentions": 1, "blog_hint": str(n["doc"].get("one_line") or "")}
+            if (
+                h.get("category_group") == "CE7"
+                and near
+                and h.get("kakao_place_id") not in taken
+                and haversine_m(center["lat"], center["lng"], h["lat"], h["lng"]) <= limit
+            ):
+                return {**h, "blog_mentions": 1, "blog_hint": str(n["doc"].get("one_line") or "")}
         return None
 
     with ThreadPoolExecutor(max_workers=5) as ex:
@@ -1493,7 +1497,9 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
         end_hhmm = req.get("end_time", "23:59")
         route_cache: dict[tuple[int, int], dict[str, Any]] = {}
 
-        def fetch_legs(seq: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        def fetch_legs(
+            seq: list[dict[str, Any]], route_cache: dict[tuple[int, int], dict[str, Any]] = route_cache
+        ) -> list[dict[str, Any]]:
             todo = [(a, b) for a, b in itertools.pairwise(seq) if (id(a), id(b)) not in route_cache]
             with ThreadPoolExecutor(max_workers=6) as ex:
                 got = list(ex.map(lambda ab: get_route.route(ab[0]["lat"], ab[0]["lng"], ab[1]["lat"], ab[1]["lng"], transport), todo))
@@ -1501,7 +1507,9 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
                 route_cache[(id(a), id(b))] = leg
             return [route_cache[(id(a), id(b))] for a, b in itertools.pairwise(seq)]
 
-        def timeline(seq: list[dict[str, Any]], seq_legs: list[dict[str, Any]]) -> tuple[list[int], int]:
+        def timeline(
+            seq: list[dict[str, Any]], seq_legs: list[dict[str, Any]], start_hhmm: str = start_hhmm
+        ) -> tuple[list[int], int]:
             """분 단위(자정 넘김 없음) 도착 시각들과, 숙소를 뺀 마지막 장소가 끝나는 시각."""
             t = _hhmm_to_min(start_hhmm)
             arrives, body_end = [], t

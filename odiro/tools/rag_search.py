@@ -26,9 +26,13 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from odiro.config import PROJECT_ROOT
 from odiro.data.ingest import regions
 from odiro.data.ingest.build_index import TAG_KEYS, get_vectorstore
 from odiro.data.ingest.common import STATE_DIR
+
+# git 으로 추적되는 시군구 목록 (배포 이미지에도 들어간다). cache/ingest_state 는 배포 서버에 없어서 이쪽을 먼저 읽는다
+SIGUNGU_DIR = PROJECT_ROOT / "data" / "sigungu"
 
 # Chroma 클라이언트를 여러 스레드가 동시에 만들면 chromadb 가 초기화 중에 깨진다 ('RustBindingsAPI' has no attribute 'bindings') → 만드는 구간만 직렬화
 _VS_LOCK = threading.Lock()
@@ -46,12 +50,16 @@ _SIDO_ALIASES: dict[str, str] = {
 
 @lru_cache(maxsize=1)
 def _sigungu_table() -> list[tuple[str, str, str]]:
-    """(시도코드, 시군구코드, 시군구이름). tour_api.fetch_sigungu 가 남긴 캐시에서 읽는다."""
+    """(시도코드, 시군구코드, 시군구이름). data/sigungu 를 먼저 읽고, tour_api.fetch_sigungu 가 남긴 캐시(STATE_DIR)로 빠진 것만 보탠다."""
     rows: list[tuple[str, str, str]] = []
-    for p in STATE_DIR.glob("sigungu_*.json"):
-        sido = p.stem.split("_", 1)[1]
-        for sg in json.loads(p.read_text(encoding="utf-8")):
-            rows.append((sido, sg["code"], sg["name"]))
+    seen: set[tuple[str, str]] = set()
+    for folder in (SIGUNGU_DIR, STATE_DIR):
+        for p in sorted(folder.glob("sigungu_*.json")):
+            sido = p.stem.split("_", 1)[1]
+            for sg in json.loads(p.read_text(encoding="utf-8")):
+                if (sido, sg["code"]) not in seen:
+                    seen.add((sido, sg["code"]))
+                    rows.append((sido, sg["code"], sg["name"]))
     return rows
 
 

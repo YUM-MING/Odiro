@@ -1,7 +1,7 @@
 """변경·삭제 갱신 테스트 (네트워크·OpenAI 없음)."""
 
 import json
-from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -86,7 +86,7 @@ def seed(tour, labeled, code="11"):
 
 
 def test_apply_sync_removes_everything_for_deleted(dirs):
-    tour, labeled, state = dirs
+    tour, labeled, _state = dirs
     seed(tour, labeled)
     # 3 삭제, 2 변경, 5 신규. 타입 12 만 받았으므로 39(4번)는 건드리지 않는다
     new = [place("1", "A"), place("2", "B"), place("5", "A")]
@@ -101,7 +101,7 @@ def test_apply_sync_removes_everything_for_deleted(dirs):
 
 
 def test_apply_sync_marks_changed_for_refetch(dirs):
-    tour, labeled, state = dirs
+    tour, labeled, _state = dirs
     seed(tour, labeled)
     sync.apply_sync("11", [place("1", "A"), place("2", "B"), place("3", "A")], [12])
     have = tour_api._stored_modified(tour / "detail_11.jsonl")
@@ -112,7 +112,7 @@ def test_apply_sync_marks_changed_for_refetch(dirs):
 
 
 def test_apply_sync_aborts_without_touching_files(dirs):
-    tour, labeled, state = dirs
+    tour, labeled, _state = dirs
     seed(tour, labeled)
     before = (tour / "area_11.jsonl").read_text(encoding="utf-8")
     with pytest.raises(sync.SyncAborted):
@@ -123,14 +123,14 @@ def test_apply_sync_aborts_without_touching_files(dirs):
 
 
 def test_purge_queue_drops_labels_and_vectors(dirs):
-    tour, labeled, state = dirs
+    tour, labeled, _state = dirs
     seed(tour, labeled)
     sync.queue_purge("11", ["2", "3"])
     sync.queue_purge("11", ["3", "9"])  # 합쳐진다
     assert sync.pending_purge("11") == ["2", "3", "9"]
 
     class FakeCol:
-        calls: list = []
+        calls: ClassVar[list] = []
 
         def delete(self, where):
             self.calls.append(where)
@@ -167,7 +167,7 @@ class FakeClient:
 
 
 def test_collect_detail_refetches_changed_and_queues_purge(dirs):
-    tour, labeled, state = dirs
+    tour, labeled, _state = dirs
     seed(tour, labeled)
     sync.apply_sync("11", [place("1", "A"), place("2", "B"), place("3", "A"), place("7", "A")], [12])
     n = tour_api.collect_detail(FakeClient(), "11", None, [12])
@@ -183,7 +183,7 @@ def test_collect_detail_refetches_changed_and_queues_purge(dirs):
 
 
 def test_collect_detail_legacy_records_not_refetched_without_sync(dirs):
-    tour, labeled, state = dirs
+    tour, labeled, _state = dirs
     seed(tour, labeled)  # modified 없는 옛 기록
     assert tour_api.collect_detail(FakeClient(), "11", None, [12]) == 0
 

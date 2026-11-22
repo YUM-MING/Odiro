@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from odiro.data.ingest.common import TOUR_DIR, read_jsonl  # noqa: E402
+from odiro.data.ingest.common import TOUR_DIR, read_jsonl
 
 OUT = ROOT / "data" / "tour_intro.json"
 FIELDS = ("rest_date", "use_time", "use_fee", "parking", "parking_fee")
