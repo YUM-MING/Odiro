@@ -5,6 +5,7 @@ import { getConfigCheck, getHealth, getMoods, MOODS, type ConfigCheck, type Cour
 import Builder from './Builder'
 import HeroScene from './HeroScene'
 import * as I from './Icons'
+import { MOCK_ENABLED } from './mock'
 import { applyPreset, defaultRequest, loadRequest, PRESETS, saveCourse, saveRequest } from './request'
 import './App.css'
 
@@ -25,10 +26,33 @@ export default function App() {
   const [config, setConfig] = useState<ConfigCheck | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // 서버 상태 확인. 콜드스타트로 늦을 수 있어 타임아웃을 넉넉히(getHealth 기본 60초) 두고,
+  // 실패하면 만들기 버튼 근처에 안내를 띄운 채 15초마다 다시 확인해 연결되면 지운다. 버튼은 막지 않는다
   useEffect(() => {
-    getHealth().then(setHealth).catch((e) => setError(String(e)))
+    let alive = true
+    let timer: number | undefined
+    const check = () => {
+      getHealth()
+        .then((h) => {
+          if (!alive) return
+          setHealth(h)
+          setError(null)
+        })
+        .catch((e) => {
+          if (!alive) return
+          console.error('[odiro] 서버 상태 확인 실패:', e)
+          setHealth(null)
+          setError(String(e))
+          timer = window.setTimeout(check, 15_000)
+        })
+    }
+    check()
     getConfigCheck().then(setConfig).catch(() => undefined)
     getMoods().then(setMoods).catch(() => undefined)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
   }, [])
 
   const go = (r: CourseRequest) => {
@@ -68,6 +92,11 @@ export default function App() {
 
             <div className="search-card">
               <Builder value={req} onChange={setReq} moods={moods} onSubmit={() => go(req)} />
+              {error && !MOCK_ENABLED && (
+                <p className="server-notice" role="status">
+                  지금 서버에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.
+                </p>
+              )}
               <div className="tags" aria-label="추천 조건">
                 {PRESETS.map((p) => (
                   <button key={p.label} type="button" className="tag" onClick={() => go(applyPreset(req, p))}>

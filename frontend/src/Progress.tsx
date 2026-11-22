@@ -5,7 +5,18 @@ import * as I from './Icons'
 import { NODE_LABEL } from './mock'
 import type { StepState } from './steps'
 
-export default function Progress({ steps, running, elapsedMs }: { steps: StepState[]; running: boolean; elapsedMs: number }) {
+export default function Progress({
+  steps,
+  running,
+  elapsedMs,
+  failed = false,
+}: {
+  steps: StepState[]
+  running: boolean
+  elapsedMs: number
+  /** 생성·수정이 오류로 끝남 (진행 중·완성이 아닐 때만 제목에 반영) */
+  failed?: boolean
+}) {
   const done = steps.filter((s) => s.status === 'done' || s.status === 'skip').length
   const finished = !running && done === steps.length
   // 기본: 진행 중엔 펼치고 끝나면 접는다. 사용자가 누른 선택은 그 상태(완료/진행)가 유지되는 동안만 따른다.
@@ -18,7 +29,7 @@ export default function Progress({ steps, running, elapsedMs }: { steps: StepSta
   return (
     <section className={`progress${open ? '' : ' collapsed'}`} aria-label="진행 상태" aria-live="polite">
       <header className="progress-head">
-        <strong>{running ? 'Odiro가 코스를 짜는 중' : finished ? '완성!' : '대기 중'}</strong>
+        <strong>{running ? 'Odiro가 코스를 짜는 중' : finished ? '완성!' : failed ? '중단됨' : '대기 중'}</strong>
         <span className="muted">
           {done}/{steps.length}
           {running && ` · ${(elapsedMs / 1000).toFixed(0)}초`}

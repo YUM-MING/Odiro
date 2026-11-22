@@ -6,11 +6,17 @@ import {
   editCourse,
   getMoods,
   getPublicConfig,
-  isNetworkError,
   MOODS,
+  MSG_DISCONNECTED,
+  MSG_TIMEOUT,
+  serverErrorMessage,
   startCourse,
   startEdit,
+  STREAM_BEFORE_FIRST,
+  STREAM_DISCONNECTED,
+  STREAM_TIMEOUT,
   subscribeStream,
+  toUserMessage,
   type CourseRequest,
   type CourseResponse,
   type EditRequest,
@@ -83,12 +89,32 @@ export default function Plan() {
     if (!req) navigate('/', { replace: true })
   }, [req, navigate])
 
+  // 지도 키: '' 는 서버가 "키 없음"이라고 답한 것(개발자 설정 문제), mapConfigFailed 는 설정 요청 자체가 실패한 것(서버 연결 문제)
+  const [mapConfigFailed, setMapConfigFailed] = useState(false)
+  const loadMapConfig = useCallback(() => {
+    getPublicConfig()
+      .then((c) => {
+        setKakaoKey(c.kakao_js_api_key || '')
+        setMapConfigFailed(false)
+      })
+      .catch((e) => {
+        if (MOCK_ENABLED) return setKakaoKey('') // 목업 모드는 백엔드 없이 도는 게 정상 → 지금처럼 키 미설정 안내
+        console.error('[odiro] 지도 설정을 받지 못함:', e)
+        setMapConfigFailed(true)
+      })
+  }, [])
+
   useEffect(() => {
     getMoods().then(setMoods).catch(() => undefined)
-    getPublicConfig()
-      .then((c) => setKakaoKey(c.kakao_js_api_key || ''))
-      .catch(() => setKakaoKey(''))
-  }, [])
+    loadMapConfig()
+  }, [loadMapConfig])
+
+  // 설정을 못 받았으면 서버가 돌아올 때까지 15초마다 다시 요청 (화면을 떠나면 정리)
+  useEffect(() => {
+    if (!mapConfigFailed) return
+    const t = window.setInterval(loadMapConfig, 15_000)
+    return () => window.clearInterval(t)
+  }, [mapConfigFailed, loadMapConfig])
 
   // 진행 중 경과 시간 / 45초 안내
   useEffect(() => {
@@ -180,9 +206,21 @@ export default function Plan() {
     setSteps((prev) => prev.map((s) => (s.status === 'start' ? { ...s, status: 'error' } : s)))
   }, [])
 
-  /** 생성/수정 공통 실행기. SSE → (첫 이벤트 전 실패 시) 동기 API → (네트워크 불가 시) 목 */
+  // 실행 번호: 새 요청을 시작하거나 화면을 떠나면 올린다 → 늦게 도착한 이전 요청의 결과·오류는 버린다
+  const runSeq = useRef(0)
+  const mounted = useRef(true)
+  // 실패했을 때 '다시 시도'가 같은 작업(생성 또는 그 수정)을 다시 하게 한다
+  const retryRef = useRef<(() => void) | null>(null)
+  const [failedAction, setFailedAction] = useState<'generate' | 'edit'>('generate')
+
+  /**
+   * 생성/수정 공통 실행기. SSE → (첫 이벤트 전 실패 시) 동기 API.
+   * 목 결과는 VITE_MOCK=1 일 때만 쓴다 (배포 환경에서 연결이 안 될 때 예시 코스를 실제 결과처럼 보이지 않게).
+   * 실패하면 이전 코스는 그대로 두고 오류 문구와 '다시 시도'를 보여 준다.
+   */
   const run = useCallback(
     async (
+      action: 'generate' | 'edit',
       nodes: readonly string[],
       start: () => Promise<{ job_id: string; stream_url: string }>,
       sync: () => Promise<CourseResponse>,
@@ -190,36 +228,46 @@ export default function Plan() {
       userText?: string,
     ) => {
       cancelRef.current?.()
+      cancelRef.current = null
+      const my = ++runSeq.current
+      const current = () => runSeq.current === my && mounted.current
+      // 다시 시도: 같은 요청을 다시 보낸다 (채팅의 사용자 말풍선은 이미 있으므로 다시 넣지 않는다)
+      retryRef.current = () => void run(action, nodes, start, sync, mock)
+      setFailedAction(action)
       setSteps(initialSteps(nodes))
       setError(null)
       setPhase('running')
       if (userText) setChat((prev) => [...prev, { id: `u${Date.now()}`, role: 'user', text: userText }])
 
-      const fallbackToMock = () => {
+      if (MOCK_ENABLED) {
         setUsingMock(true)
         const result = mock()
         cancelRef.current = simulateProgress(nodes, applyStep, () => finish(result))
+        return
       }
-      if (MOCK_ENABLED) return fallbackToMock()
 
+      const failNow = (msg: string) => current() && fail(msg)
       try {
         const job = await start()
+        if (!current()) return // 그 사이 새 요청을 시작했거나 화면을 떠났다
         cancelRef.current = subscribeStream(job.stream_url, {
-          onProgress: applyStep,
-          onResult: (c) => finish(c),
+          onProgress: (s) => current() && applyStep(s),
+          onResult: (c) => current() && finish(c),
           onError: async (m) => {
-            if (m !== '__before_first__') return fail(m)
+            if (m === STREAM_DISCONNECTED) return failNow(MSG_DISCONNECTED)
+            if (m === STREAM_TIMEOUT) return failNow(MSG_TIMEOUT)
+            if (m !== STREAM_BEFORE_FIRST) return failNow(serverErrorMessage(m))
+            // 진행 이벤트를 하나도 못 받고 끊겼다 → 동기 API 로 한 번 더. 그것도 실패하면 같은 오류 화면
             try {
-              finish(await sync())
+              const c = await sync()
+              if (current()) finish(c)
             } catch (e) {
-              fail(e instanceof Error ? e.message : String(e))
+              failNow(toUserMessage(e))
             }
           },
         })
       } catch (e) {
-        if (isNetworkError(e)) return fallbackToMock()
-        const detail = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        fail(detail ?? (e instanceof Error ? e.message : String(e)))
+        failNow(toUserMessage(e))
       }
     },
     [applyStep, finish, fail],
@@ -232,7 +280,7 @@ export default function Plan() {
       const { day_starts: _drop, ...r } = req0
       void _drop
       setChat([])
-      void run(GENERATE_NODES, () => startCourse(r, refresh), () => createCourse(r, refresh), () => mockCourse(r))
+      void run('generate', GENERATE_NODES, () => startCourse(r, refresh), () => createCourse(r, refresh), () => mockCourse(r))
     },
     [run],
   )
@@ -242,6 +290,7 @@ export default function Plan() {
       if (!course) return
       const body: EditRequest = { course, instruction, target_order: targetOrder, target_day: targetDay }
       void run(
+        'edit',
         EDIT_NODES,
         () => startEdit(body),
         () => editCourse(body),
@@ -271,7 +320,15 @@ export default function Plan() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [req])
 
-  useEffect(() => () => cancelRef.current?.(), [])
+  // 화면을 떠나면 스트림·타이머를 닫고, 진행 중이던 요청의 늦은 결과는 버린다.
+  // (개발 모드 StrictMode 는 마운트 직후 정리→재마운트를 한 번 흉내 내므로, 재마운트 때 다시 true 로 돌린다)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      cancelRef.current?.()
+    }
+  }, [])
 
   /**
    * 조건 드로어를 닫으면서 고친 조건을 적용한다 (바깥 클릭·X·Enter 모두 같다).
@@ -432,7 +489,7 @@ export default function Plan() {
 
       <div className="plan-body">
         <aside className="left">
-          <Progress steps={steps} running={phase === 'running'} elapsedMs={elapsed} />
+          <Progress steps={steps} running={phase === 'running'} elapsedMs={elapsed} failed={phase === 'error'} />
 
           {course && (
             <div className="info-strip">
@@ -589,17 +646,22 @@ export default function Plan() {
                 <span className="avatar" aria-hidden="true" />
                 <div className="bubble thinking">
                   <span className="dots"><i /><i /><i /></span>
-                  {slow ? '조금 오래 걸리고 있어요. 외부 지도·날씨 API 응답을 기다리는 중이에요…' : '코스를 짜고 있어요…'}
+                  {slow ? '생각보다 오래 걸리고 있어요. 조금만 기다려 주세요…' : '코스를 짜고 있어요…'}
                 </div>
               </div>
             )}
             {phase === 'error' && (
               <div className="msg odiro">
                 <span className="avatar" aria-hidden="true" />
-                <div className="bubble error">
-                  <strong>코스를 만들지 못했어요.</strong>
+                <div className="bubble error" role="alert">
+                  <strong>{failedAction === 'edit' && course ? '코스를 바꾸지 못했어요. 지금 코스는 그대로예요.' : '코스를 만들지 못했어요.'}</strong>
                   <div className="small">{error}</div>
-                  <button className="btn btn-ghost small-btn" onClick={() => generate(req)}>다시 시도</button>
+                  <button
+                    className="btn btn-ghost small-btn"
+                    onClick={() => (retryRef.current ? retryRef.current() : generate(req))}
+                  >
+                    다시 시도
+                  </button>
                 </div>
               </div>
             )}
@@ -640,6 +702,8 @@ export default function Plan() {
         <main className="right">
           <MapView
             kakaoKey={kakaoKey}
+            configFailed={mapConfigFailed}
+            onRetryConfig={loadMapConfig}
             places={course?.places ?? []}
             legs={course?.legs ?? []}
             selected={selected}

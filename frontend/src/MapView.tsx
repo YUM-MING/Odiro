@@ -23,7 +23,10 @@ function loadSdk(key: string): Promise<void> {
 }
 
 interface Props {
-  kakaoKey: string | null | undefined // undefined: 아직 모름, '': 미설정
+  kakaoKey: string | null | undefined // undefined: 아직 모름, '': 서버가 키 없음이라고 답함(개발자 설정)
+  /** 지도 설정(/api/public-config) 요청 자체가 실패함 — 서버 연결 문제. 키 미설정과 구분한다 */
+  configFailed?: boolean
+  onRetryConfig?: () => void
   places: PlaceOut[]
   legs: LegOut[]
   selected: number | null
@@ -36,7 +39,9 @@ interface Props {
   showParking: boolean // 자차 코스일 때만 정보 창에 주차장을 보인다
 }
 
-export default function MapView({ kakaoKey, places, legs, selected, focus, onSelect, days, activeDay, onDayChange, showParking }: Props) {
+export default function MapView({
+  kakaoKey, configFailed, onRetryConfig, places, legs, selected, focus, onSelect, days, activeDay, onDayChange, showParking,
+}: Props) {
   const box = useRef<HTMLDivElement>(null)
   const map = useRef<kakao.maps.Map | null>(null)
   const overlays = useRef<kakao.maps.CustomOverlay[]>([])
@@ -155,7 +160,19 @@ export default function MapView({ kakaoKey, places, legs, selected, focus, onSel
           <span>백엔드 .env 의 KAKAO_JS_API_KEY 를 채우고, 카카오 콘솔에 이 도메인을 등록하세요.</span>
         </div>
       )}
-      {kakaoKey === undefined && !sdkError && <div className="map-placeholder">지도 불러오는 중…</div>}
+      {kakaoKey === undefined && !sdkError && configFailed && (
+        <div className="map-placeholder" role="status">
+          <I.Map size={36} />
+          <strong>지도를 불러오지 못했어요</strong>
+          <span>서버에 연결되면 자동으로 다시 불러와요.</span>
+          {onRetryConfig && (
+            <button type="button" className="btn btn-ghost small-btn" onClick={onRetryConfig}>
+              다시 시도
+            </button>
+          )}
+        </div>
+      )}
+      {kakaoKey === undefined && !sdkError && !configFailed && <div className="map-placeholder">지도 불러오는 중…</div>}
       {sdkError && (
         <div className="map-placeholder">
           <strong>지도를 불러오지 못했어요</strong>

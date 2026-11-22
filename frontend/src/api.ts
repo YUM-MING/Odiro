@@ -154,7 +154,8 @@ export interface JobStarted {
   stream_url: string
 }
 
-export const getHealth = () => api.get<Health>('/api/health').then((r) => r.data)
+/** timeout: Cloud Run 콜드스타트(최소 인스턴스 0)로 첫 응답이 늦을 수 있어 랜딩 확인은 넉넉히 준다 */
+export const getHealth = (timeout = 60_000) => api.get<Health>('/api/health', { timeout }).then((r) => r.data)
 export const getConfigCheck = () => api.get<ConfigCheck>('/api/config-check').then((r) => r.data)
 export const getPublicConfig = () => api.get<PublicConfig>('/api/public-config').then((r) => r.data)
 export const getMoods = () =>
@@ -163,20 +164,88 @@ export const getMoods = () =>
     .then((r) => r.data.moods)
     .catch(() => [...MOODS])
 
+/**
+ * 동기 생성·수정(SSE 가 첫 이벤트 전에 끊겼을 때의 대체 요청) 타임아웃.
+ * 서버가 90초(odiro/api/main.py SYNC_TIMEOUT_SEC)에 "너무 오래 걸립니다"(503)로 끊으므로 그보다 약간 길게 둬서
+ * 서버의 안내를 받게 한다. SSE 전체 상한(STREAM_TOTAL_TIMEOUT_MS)은 스트림이 끝난 뒤 이 요청이 시작되므로 겹치지 않는다.
+ */
+export const SYNC_REQUEST_TIMEOUT_MS = 100_000
+
 /** refresh=true: 서버의 7일 결과 캐시를 건너뛰고 새로 만든다 ('다시 만들기') */
 export const createCourse = (req: CourseRequest, refresh = false) =>
-  api.post<CourseResponse>('/api/course', req, { params: refresh ? { refresh: true } : undefined }).then((r) => r.data)
+  api
+    .post<CourseResponse>('/api/course', req, { params: refresh ? { refresh: true } : undefined, timeout: SYNC_REQUEST_TIMEOUT_MS })
+    .then((r) => r.data)
 export const startCourse = (req: CourseRequest, refresh = false) =>
   api.post<JobStarted>('/api/course/start', req, { params: refresh ? { refresh: true } : undefined }).then((r) => r.data)
 export const editCourse = (req: EditRequest) =>
-  api.post<CourseResponse>('/api/course/edit', req).then((r) => r.data)
+  api.post<CourseResponse>('/api/course/edit', req, { timeout: SYNC_REQUEST_TIMEOUT_MS }).then((r) => r.data)
 export const startEdit = (req: EditRequest) =>
   api.post<JobStarted>('/api/course/edit/start', req).then((r) => r.data)
 
-/** 네트워크 자체가 안 되는 오류(백엔드 미기동 등)인지. 이 경우에만 목 데이터로 폴백한다. */
+/** 네트워크 자체가 안 되는 오류(백엔드 미기동·연결 거부 등)인지 */
 export function isNetworkError(e: unknown): boolean {
   return axios.isAxiosError(e) && !e.response
 }
+
+// ---------- 사용자에게 보여 줄 오류 문구 ----------
+
+export const MSG_CONNECT = '서버에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.'
+export const MSG_TIMEOUT = '코스를 만드는 데 너무 오래 걸리고 있어요. 다시 시도해 주세요.'
+export const MSG_DISCONNECTED = '서버와 연결이 끊어졌어요. 다시 시도해 주세요.'
+export const MSG_GENERIC = '잠시 후 다시 시도해 주세요.'
+
+/** 한글 문장이고 영어 단어·코드(예외 이름, URL, 키 이름)가 섞이지 않은 문구만 사용자용으로 본다 */
+function isUserFacing(msg: string): boolean {
+  return /[가-힣]/.test(msg) && !/[A-Za-z_]{3,}/.test(msg)
+}
+
+/** 요청·스트림 오류 → 사용자 문구. 원래 기술 메시지는 콘솔에만 남긴다 */
+export function toUserMessage(e: unknown): string {
+  console.error('[odiro] 요청 실패:', e)
+  if (axios.isAxiosError(e)) {
+    if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT') return MSG_TIMEOUT
+    if (!e.response) return MSG_CONNECT
+    const detail = (e.response.data as { detail?: unknown } | undefined)?.detail
+    const text = typeof detail === 'string' ? detail : ''
+    if (text.includes('오래 걸')) return MSG_TIMEOUT // 서버의 동기 API 시간 초과(503) 안내
+    if ([502, 503, 504].includes(e.response.status)) return MSG_CONNECT
+    return text && isUserFacing(text) ? text : MSG_GENERIC
+  }
+  return MSG_GENERIC
+}
+
+/** 서버가 보낸 SSE error 이벤트의 메시지: 사용자용이면 그대로, 아니면 일반 문구 */
+export function serverErrorMessage(msg: string): string {
+  if (isUserFacing(msg)) return msg
+  console.error('[odiro] 서버 오류:', msg)
+  return MSG_GENERIC
+}
+
+// ---------- SSE ----------
+
+/** 연결이 끊긴 뒤 브라우저의 자동 재연결(CONNECTING)을 기다려 주는 시간. 넘으면 끊김으로 처리 */
+export const STREAM_RECONNECT_GRACE_MS = 10_000
+/**
+ * 생성·수정 스트림 전체 대기 상한. Cloud Run 요청 타임아웃이 120초(deploy.yml --timeout 120)라
+ * 그 안에 결과가 오지 않으면 정상 완료 가능성이 낮다. 콜드스타트·재연결 여유 30초를 더해 150초.
+ * (평가 기준 2일 여행 35~47초, 로컬 첫 요청 57초)
+ */
+export const STREAM_TOTAL_TIMEOUT_MS = 150_000
+/**
+ * 스트림이 이만큼 조용하면 서버가 살아 있는지 health 로 확인한다. 서버가 죽어도 중간 프록시가 브라우저 쪽 연결을
+ * 열어 둔 채 멈추면 EventSource 는 오류를 내지 않는다(로컬 Vite 프록시에서 재현). 서버의 keep-alive 는 SSE 주석이라
+ * 브라우저 코드에서 보이지 않으므로, 조용한 동안 health 를 STREAM_PROBE_EVERY_MS 마다 묻고 연속 2번 실패하면 끊김으로 본다.
+ * 노드 하나가 오래 걸려도(LLM 25초+) 서버가 살아 있으면 health 가 성공하므로 계속 기다린다.
+ */
+export const STREAM_QUIET_MS = 10_000
+export const STREAM_PROBE_EVERY_MS = 5_000
+const STREAM_PROBE_FAILS = 2
+
+/** onError 로 오는 값: 서버 메시지 그대로, 또는 아래 연결 상태 코드 */
+export const STREAM_BEFORE_FIRST = '__before_first__' // 이벤트를 하나도 못 받고 끊김 → 동기 API 로 재시도
+export const STREAM_DISCONNECTED = '__disconnected__' // 진행 중 끊김
+export const STREAM_TIMEOUT = '__timeout__' // 전체 상한 초과
 
 export interface StreamHandlers {
   onProgress: (step: TraceStep) => void
@@ -184,35 +253,91 @@ export interface StreamHandlers {
   onError: (message: string) => void
 }
 
-/** SSE 구독. 반환된 함수로 닫는다. 첫 이벤트 전에 끊기면 onError('__before_first__') 를 준다. */
+/**
+ * SSE 구독. 반환된 함수로 닫는다 (타이머도 함께 정리). onResult·onError 는 합쳐서 한 번만 불린다.
+ * - 서버가 보낸 error 이벤트 → 그 메시지
+ * - 연결이 끊겨 브라우저가 재연결을 STREAM_RECONNECT_GRACE_MS 넘게 못 하면(또는 아예 CLOSED) → STREAM_BEFORE_FIRST / STREAM_DISCONNECTED
+ * - 전체 STREAM_TOTAL_TIMEOUT_MS 초과 → STREAM_TIMEOUT
+ */
 export function subscribeStream(streamUrl: string, h: StreamHandlers): () => void {
   const url = streamUrl.startsWith('http') ? streamUrl : `${baseURL}${streamUrl}`
   const es = new EventSource(url)
   let gotAny = false
+  let ended = false
+  let graceTimer: number | undefined
+  let lastActivity = Date.now()
+  let probing = false
+  let probeFails = 0
+
+  const clearGrace = () => {
+    if (graceTimer !== undefined) window.clearTimeout(graceTimer)
+    graceTimer = undefined
+  }
+  const alive = () => {
+    lastActivity = Date.now()
+    probeFails = 0
+    clearGrace()
+  }
+  const end = () => {
+    ended = true
+    clearGrace()
+    window.clearTimeout(totalTimer)
+    window.clearInterval(watchdog)
+    es.close()
+  }
+  const failWith = (message: string) => {
+    if (ended) return
+    end()
+    h.onError(message)
+  }
+  const totalTimer = window.setTimeout(() => failWith(STREAM_TIMEOUT), STREAM_TOTAL_TIMEOUT_MS)
+  // 조용한 스트림 감시: 서버가 죽었는데 연결만 걸려 있는 경우를 health 로 알아낸다
+  const watchdog = window.setInterval(() => {
+    if (ended || probing || Date.now() - lastActivity < STREAM_QUIET_MS) return
+    probing = true
+    getHealth(5_000)
+      .then(() => {
+        probeFails = 0
+      })
+      .catch(() => {
+        probeFails += 1
+        if (probeFails >= STREAM_PROBE_FAILS) failWith(gotAny ? STREAM_DISCONNECTED : STREAM_BEFORE_FIRST)
+      })
+      .finally(() => {
+        probing = false
+      })
+  }, STREAM_PROBE_EVERY_MS)
+
+  es.addEventListener('open', alive) // (재)연결 성공
   es.addEventListener('progress', (ev) => {
+    if (ended) return
     gotAny = true
+    alive()
     h.onProgress(JSON.parse((ev as MessageEvent).data) as TraceStep)
   })
   es.addEventListener('result', (ev) => {
+    if (ended) return
     gotAny = true
+    end()
     h.onResult(JSON.parse((ev as MessageEvent).data) as CourseResponse)
-    es.close()
   })
   es.addEventListener('error', (ev) => {
     // 서버가 보낸 error 이벤트(data 있음) vs 연결 오류(data 없음)
     const data = (ev as MessageEvent).data
     if (data) {
+      let message = String(data)
       try {
-        h.onError((JSON.parse(data) as { message: string }).message)
+        message = (JSON.parse(data) as { message: string }).message
       } catch {
-        h.onError(String(data))
+        /* 그대로 */
       }
-      es.close()
+      failWith(message)
       return
     }
-    if (es.readyState === EventSource.CLOSED) {
-      h.onError(gotAny ? '연결이 끊어졌어요.' : '__before_first__')
-    }
+    const lost = gotAny ? STREAM_DISCONNECTED : STREAM_BEFORE_FIRST
+    if (es.readyState === EventSource.CLOSED) return failWith(lost)
+    // CONNECTING: 브라우저가 자동 재연결 중. 일정 시간 안에 다시 이어지지 않으면 끊김으로 처리
+    if (graceTimer === undefined) graceTimer = window.setTimeout(() => failWith(lost), STREAM_RECONNECT_GRACE_MS)
   })
-  return () => es.close()
+  return end
 }
