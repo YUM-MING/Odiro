@@ -178,9 +178,12 @@
 
 .fields {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* 지역(·숙소) 칸은 한 줄 전체, 날짜·교통수단은 다음 줄에 나란히. dense: 숙소 칸 때문에 생기는 빈칸을 교통수단이 메운다 */
+  grid-template-columns: repeat(2, 1fr);
+  grid-auto-flow: row dense;
   gap: 10px;
 }
+.field-wide { grid-column: 1 / -1; }
 
 .field {
   display: flex;

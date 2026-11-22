@@ -1,5 +1,5 @@
 // Kakao Map JS: 번호 핀(커스텀 오버레이) + 동선 폴리라인 + 선택 장소 팝업.
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LegOut, PlaceOut } from './api'
 import DayTabs from './DayTabs'
 import * as I from './Icons'
@@ -27,6 +27,8 @@ interface Props {
   places: PlaceOut[]
   legs: LegOut[]
   selected: number | null
+  /** 사용자가 핀·카드를 눌러 고른 장소. seq 가 바뀔 때만 그 장소로 이동한다 (자동 선택은 이동하지 않음) */
+  focus: { idx: number; seq: number } | null
   onSelect: (idx: number | null) => void
   days: number[]
   activeDay: number
@@ -34,7 +36,7 @@ interface Props {
   showParking: boolean // 자차 코스일 때만 정보 창에 주차장을 보인다
 }
 
-export default function MapView({ kakaoKey, places, legs, selected, onSelect, days, activeDay, onDayChange, showParking }: Props) {
+export default function MapView({ kakaoKey, places, legs, selected, focus, onSelect, days, activeDay, onDayChange, showParking }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const map = useRef<kakao.maps.Map | null>(null)
   const overlays = useRef<kakao.maps.CustomOverlay[]>([])
@@ -77,11 +79,9 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect, da
     if (!places.length) return
 
     // 하루치만 그린다 (여러 날이 한꺼번에 보이면 복잡하다). 단일 날 코스는 전부 day 1 이라 그대로 다 보인다
-    const bounds = new kakao.maps.LatLngBounds()
     places.forEach((p, idx) => {
       if (!p.verified || p.day !== activeDay) return
       const pos = new kakao.maps.LatLng(p.lat, p.lng)
-      bounds.extend(pos)
       const el = document.createElement('button')
       el.type = 'button'
       el.className = `pin${selected === idx ? ' selected' : ''}`
@@ -110,16 +110,38 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect, da
       line.setMap(m)
       lines.current.push(line)
     })
-    m.setBounds(bounds, 60, 60, 120, 60)
   }, [ready, places, legs, selected, onSelect, activeDay])
 
-  // 선택 장소로 이동
+  // 그날의 핀 전체가 보이게 맞춘다. 핀을 고를 때마다 다시 맞추지 않도록 그리기와 분리했다
+  const fitDay = useCallback(() => {
+    const m = map.current
+    if (!ready || !m) return
+    const pts = places.filter((p) => p.verified && p.day === activeDay)
+    if (!pts.length) return
+    m.relayout() // 지도 영역 크기가 바뀐 뒤일 수 있으므로 크기를 다시 잰 다음 맞춘다
+    if (pts.length === 1) {
+      m.setCenter(new kakao.maps.LatLng(pts[0].lat, pts[0].lng))
+      m.setLevel(4)
+      return
+    }
+    const bounds = new kakao.maps.LatLngBounds()
+    pts.forEach((p) => bounds.extend(new kakao.maps.LatLng(p.lat, p.lng)))
+    m.setBounds(bounds, 60, 60, 120, 60)
+  }, [ready, places, activeDay])
+
+  // 새 코스·Day 탭이 바뀌면 전체 보기 (첫 장소 정보 창이 자동으로 열려도 확대·이동하지 않는다)
+  useEffect(() => fitDay(), [fitDay])
+
+  // 사용자가 핀·카드를 눌렀을 때만 그 장소로 이동
   useEffect(() => {
     const m = map.current
-    if (!ready || !m || selected === null) return
-    const p = places[selected]
-    if (p) m.panTo(new kakao.maps.LatLng(p.lat, p.lng))
-  }, [ready, selected, places])
+    if (!ready || !m || !focus) return
+    const p = places[focus.idx]
+    if (p && p.day === activeDay) m.panTo(new kakao.maps.LatLng(p.lat, p.lng))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, focus])
+
+  const hasPins = places.some((p) => p.verified && p.day === activeDay)
 
   const sel = selected !== null && places[selected]?.day === activeDay ? places[selected] : null
 
@@ -141,6 +163,11 @@ export default function MapView({ kakaoKey, places, legs, selected, onSelect, da
         </div>
       )}
       <DayTabs days={days} active={activeDay} onChange={onDayChange} className="map-day-tabs" />
+      {ready && hasPins && (
+        <button type="button" className="map-fit" onClick={fitDay} aria-label="이 날 코스 전체 보기" title="이 날 코스 전체 보기">
+          전체 보기
+        </button>
+      )}
       {sel && (
         <div className="popup" role="dialog" aria-label={`${sel.name} 정보`}>
           <button className="popup-close" aria-label="닫기" onClick={() => onSelect(null)}>

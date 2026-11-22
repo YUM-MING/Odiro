@@ -86,7 +86,7 @@ export default function Builder({
       </div>
 
       <div className="fields">
-        <label className="field">
+        <label className="field field-wide">
           <span className="field-icon"><I.Pin /></span>
           <input
             className="field-input"
@@ -119,7 +119,7 @@ export default function Builder({
           )}
         </label>
         {value.mode === 'trip' && (
-          <label className="field">
+          <label className="field field-wide">
             <span className="field-icon"><I.Pin /></span>
             <input
               className="field-input"

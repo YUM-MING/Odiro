@@ -25,7 +25,7 @@ import { renderMarkdown, splitAnswer } from './markdown'
 import { EDIT_NODES, GENERATE_NODES, MOCK_ENABLED, mockCourse, mockEdit, simulateProgress } from './mock'
 import Progress from './Progress'
 import { initialSteps, type StepState } from './steps'
-import { formatDate, loadCourse, loadRequest, saveCourse, saveRequest, shareConditions, summarize } from './request'
+import { formatDate, loadCourse, loadRequest, saveCourse, saveRequest, shareConditions, summarize, withValidDate } from './request'
 import './Plan.css'
 
 type Phase = 'idle' | 'running' | 'done' | 'error'
@@ -47,7 +47,13 @@ export default function Plan() {
   const location = useLocation()
   const navState = (location.state ?? {}) as { request?: CourseRequest; fresh?: boolean }
 
-  const [req, setReq] = useState<CourseRequest | null>(() => navState.request ?? loadRequest())
+  // 랜딩에서 막 넘어온 조건은 그대로. 저장된 코스를 다시 보여 주는 경우(새로고침 복원)는 날짜를 바꾸지 않고,
+  // 복원할 코스가 없어 새로 만들게 되는 경우만 지난 날짜를 기본 날짜로 바꾼다
+  const [req, setReq] = useState<CourseRequest | null>(() => {
+    if (navState.fresh) return navState.request ?? loadRequest()
+    const r = navState.request ?? loadRequest({ keepDate: true })
+    return r && !loadCourse() ? withValidDate(r) : r
+  })
   const [draft, setDraft] = useState<CourseRequest | null>(null) // 드로어 편집용
   const [course, setCourse] = useState<CourseResponse | null>(() => (navState.fresh ? null : loadCourse()))
   const [chat, setChat] = useState<ChatMsg[]>([])
@@ -57,6 +63,8 @@ export default function Plan() {
   const [slow, setSlow] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [selected, setSelected] = useState<number | null>(null)
+  // 사용자가 카드·핀을 눌러 고른 장소 → 지도가 그 장소로 이동. 자동 선택(첫 장소·Day 탭)은 이동하지 않고 전체 보기를 유지
+  const [focus, setFocus] = useState<{ idx: number; seq: number } | null>(null)
   const [activeDay, setActiveDay] = useState(1)
   const [moods, setMoods] = useState<string[]>([...MOODS])
   const [kakaoKey, setKakaoKey] = useState<string | undefined>(undefined)
@@ -128,6 +136,7 @@ export default function Plan() {
       setSelected(idx)
       const day = idx === null ? undefined : course?.places[idx]?.day
       if (day !== undefined) setActiveDay(day)
+      if (idx !== null) setFocus((f) => ({ idx, seq: (f?.seq ?? 0) + 1 }))
     },
     [course],
   )
@@ -377,8 +386,14 @@ export default function Plan() {
         </button>
         <div className="plan-actions">
           {usingMock && <span className="mock-badge" title="백엔드에 연결되지 않아 예시 데이터를 보여줍니다">예시 모드</span>}
-          <button className="btn btn-ghost" onClick={() => generate(req, true)} disabled={phase === 'running'}>
-            <I.Refresh size={16} /> 다시 만들기
+          <button
+            className="btn btn-ghost"
+            onClick={() => generate(req, true)}
+            disabled={phase === 'running'}
+            aria-label="다시 만들기"
+            title="다시 만들기"
+          >
+            <I.Refresh size={16} /> <span>다시 만들기</span>
           </button>
           <div className="share-wrap" ref={shareRef}>
             <button
@@ -628,6 +643,7 @@ export default function Plan() {
             places={course?.places ?? []}
             legs={course?.legs ?? []}
             selected={selected}
+            focus={focus}
             onSelect={selectPlace}
             days={days}
             activeDay={shownDay}

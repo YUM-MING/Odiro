@@ -4,15 +4,24 @@ import type { CourseRequest, CourseResponse } from './api'
 const REQ_KEY = 'odiro.request'
 const COURSE_KEY = 'odiro.course'
 
+// toISOString 은 UTC 라 한국 저녁엔 하루가 밀린다 → 브라우저 로컬 날짜로 YYYY-MM-DD 조립
+function localYmd(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
 /** 다음 토요일 (오늘이 토요일이면 오늘). */
 export function nextSaturday(from = new Date()): string {
   const d = new Date(from)
   const diff = (6 - d.getDay() + 7) % 7
   d.setDate(d.getDate() + diff)
-  // toISOString 은 UTC 라 한국 저녁엔 하루가 밀린다 → 로컬 날짜로 조립
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${mm}-${dd}`
+  return localYmd(d)
+}
+
+/** 저장된 날짜가 오늘(브라우저 기준)보다 이전이면 날짜만 기본값(다음 토요일)으로 바꾼다. 다른 값은 그대로 */
+export function withValidDate(r: CourseRequest, now = new Date()): CourseRequest {
+  return r.date < localYmd(now) ? { ...r, date: defaultRequest().date } : r
 }
 
 export function defaultRequest(): CourseRequest {
@@ -47,8 +56,12 @@ export const PRESETS: Preset[] = [
   { label: '수원 화성 레트로', patch: { region: '수원 화성', mode: 'outing', transport: 'walk', moods: ['레트로', '사진맛집'] } },
 ]
 
+/**
+ * 지금 입력값(base) 위에 프리셋을 덮는다. 날짜·시작/종료 시각·예산·인원은 사용자가 고른 값을 그대로 두고,
+ * 지역·모드·이동수단·분위기·동행은 프리셋 값으로 바꾼다. 이전 지역에 묶인 자유 조건·숙소는 비운다.
+ */
 export function applyPreset(base: CourseRequest, p: Preset): CourseRequest {
-  const next = { ...base, ...p.patch }
+  const next: CourseRequest = { ...base, free_text: '', lodging: '', party: '', ...p.patch }
   if (next.mode === 'outing') {
     next.days = 1
     next.lodging = ''
@@ -59,11 +72,16 @@ export function applyPreset(base: CourseRequest, p: Preset): CourseRequest {
 export function saveRequest(r: CourseRequest) {
   sessionStorage.setItem(REQ_KEY, JSON.stringify(r))
 }
-export function loadRequest(): CourseRequest | null {
+/**
+ * 저장된 조건. 지난 날짜는 기본 날짜로 바꿔 돌려준다.
+ * keepDate: 이미 만든 코스를 다시 보여 줄 때(새로고침 복원)는 그 코스의 날짜를 그대로 둔다
+ */
+export function loadRequest({ keepDate = false }: { keepDate?: boolean } = {}): CourseRequest | null {
   const s = sessionStorage.getItem(REQ_KEY)
   if (!s) return null
   try {
-    return { ...defaultRequest(), ...(JSON.parse(s) as Partial<CourseRequest>) }
+    const r = { ...defaultRequest(), ...(JSON.parse(s) as Partial<CourseRequest>) }
+    return keepDate ? r : withValidDate(r)
   } catch {
     return null
   }

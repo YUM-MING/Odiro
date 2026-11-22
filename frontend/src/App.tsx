@@ -70,7 +70,7 @@ export default function App() {
               <Builder value={req} onChange={setReq} moods={moods} onSubmit={() => go(req)} />
               <div className="tags" aria-label="추천 조건">
                 {PRESETS.map((p) => (
-                  <button key={p.label} type="button" className="tag" onClick={() => go(applyPreset(defaultRequest(), p))}>
+                  <button key={p.label} type="button" className="tag" onClick={() => go(applyPreset(req, p))}>
                     # {p.label}
                   </button>
                 ))}
