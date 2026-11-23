@@ -1,6 +1,8 @@
 """scripts/eval_courses.py 의 지표 계산 (네트워크·LLM 없음)."""
 
 import importlib.util
+import json
+from datetime import datetime
 from pathlib import Path
 
 from odiro.api.schemas import CourseRequest, CourseResponse, PlaceOut
@@ -80,6 +82,122 @@ def test_overtime_handles_past_midnight_and_missing_arrive():
 
 
 def test_scenarios_are_valid_requests():
-    assert len(ev.SCENARIOS) == 10
+    assert len(ev.SCENARIOS) == 11
     for cfg in ev.SCENARIOS.values():
         CourseRequest(date="2026-11-20", **cfg)
+
+
+def test_gapyeong_preset_matches_site_preset_defaults():
+    # 사이트 "# 가평 1박 2일" = defaultRequest() + PRESETS patch (frontend/src/request.ts). 날짜만 --date 로 바뀐다
+    req = CourseRequest(date="2026-11-26", **ev.SCENARIOS["gapyeong_preset"])
+    assert (req.mode, req.transport, req.region, req.days) == ("trip", "car", "가평", 2)
+    assert (req.start_time, req.end_time, req.budget, req.headcount) == ("11:00", "20:00", 100_000, 1)
+    assert req.moods == ["자연/산책", "뷰맛집/일몰"] and req.party == "연인" and req.free_text == "" and req.lodging == ""
+    assert ev.SCENARIOS["gapyeong_trip"]["start_time"] == "10:00"  # 기존 시나리오는 그대로
+
+
+# ---------- 중복 의심 · 분류 의심 · 경고 문구 ----------
+
+
+def test_same_shop_with_spacing_difference_is_duplicate():
+    # 11/22 가평 재현: TourAPI 좌표의 "카페 드 모파상"(관광지) + 카카오 좌표의 "카페드모파상"(식당), 약 22m
+    places = [
+        _p(1, "카페 드 모파상", "관광지", lat=37.7013794825, lng=127.3963235444, pid=""),
+        _p(2, "카페드모파상", "식당", lat=37.70124550237815, lng=127.3961320593873),
+        _p(3, "청평호반", "관광지", lat=37.73, lng=127.42),
+    ]
+    m = ev.evaluate(_resp(places), CENTER, 30_000)
+    assert m["dup_suspects"] == 1
+    pair = m["dup_pairs"][0]
+    assert {pair["a"], pair["b"]} == {"카페 드 모파상", "카페드모파상"} and 15 <= pair["dist_m"] <= 30
+    assert {pair["a_category"], pair["b_category"]} == {"관광지", "식당"}
+
+
+def test_different_shops_30m_apart_are_not_duplicate():
+    # 좌표만으로는 판정하지 않는다: 같은 건물의 다른 매장
+    places = [_p(1, "로우키커피", "카페", lat=37.5446, lng=127.0557), _p(2, "하노이별", "식당", lat=37.54487, lng=127.0557)]
+    m = ev.evaluate(_resp(places), CENTER, 1500)
+    assert m["dup_suspects"] == 0
+
+
+def test_same_name_rules_and_thresholds():
+    # 정규화 이름 일치는 150m 까지, 비슷한 이름(유사도 ≥ 0.85)은 50m 까지
+    assert ev.same_place("서울숲", 37.5444, 127.0374, "서울 숲", 37.5444 + 0.0012, 127.0374)[0]  # 약 133m, 이름 같음
+    assert not ev.same_place("서울숲", 37.5444, 127.0374, "서울 숲", 37.5444 + 0.0018, 127.0374)[0]  # 약 200m
+    assert ev.same_place("어니언 성수", 37.5446, 127.0557, "어니언 성수점", 37.5449, 127.0557)[0]  # 약 33m, 지점명만 다름
+    assert not ev.same_place("어니언 성수", 37.5446, 127.0557, "어니언 성수점", 37.5452, 127.0557)[0]  # 약 67m
+
+
+def test_lodging_repeated_every_night_is_not_duplicate():
+    places = [_p(1, "a", "식당"), _p(2, "가평 펜션", "숙소"), _p(1, "b", "카페", day=2), _p(2, "가평 펜션", "숙소", day=2)]
+    assert ev.evaluate(_resp(places), CENTER, 30_000)["dup_suspects"] == 0
+
+
+def test_mislabel_by_name_words():
+    places = [
+        _p(1, "카페앤", "식당"),  # 이름은 카페
+        _p(2, "서호식당", "관광지"),  # 이름은 식당
+        _p(3, "청평자연휴양림", "관광지"),  # 정상
+        _p(4, "성수동카페거리", "놀거리"),  # 거리는 가게가 아니다 → 의심 안 함
+        _p(5, "봉녀수제비", "관광지"),
+        _p(6, "메모레", "카페"),  # 이름에 단서 없음 → 의심 안 함
+    ]
+    m = ev.evaluate(_resp(places), CENTER, 30_000)
+    assert [(x["name"], x["category"], x["looks_like"]) for x in m["mislabel_places"]] == [
+        ("카페앤", "식당", "카페"), ("서호식당", "관광지", "식당"), ("봉녀수제비", "관광지", "식당"),
+    ]
+    assert m["mislabels"] == 3
+
+
+def test_warning_texts_are_saved(tmp_path):
+    r = _resp([_p(1, "a", "식당"), _p(2, "b", "카페")])
+    r.meta.warnings = ["Day 1 일정이 종료 시각(20:00)을 넘어 c을(를) 뺐어요", "지도에서 확인되지 않았거나 중복된 장소 1곳을 제외했어요"]
+    m = ev.evaluate(r, CENTER, 1500)
+    assert m["warnings"] == 2 and m["warnings_text"] == r.meta.warnings
+    path = ev.save_results(tmp_path, ["seongsu_walk"], "2026-11-26", {"seongsu_walk": m}, "표")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["date"] == "2026-11-26" and saved["results"]["seongsu_walk"]["warnings_text"] == r.meta.warnings
+
+
+def test_compare_with_old_file_without_new_metrics():
+    new = ev.evaluate(_resp([_p(1, "a", "식당"), _p(2, "b", "카페")]), CENTER, 1500)
+    old = {k: v for k, v in new.items() if k not in ("dup_suspects", "dup_pairs", "mislabels", "mislabel_places", "warnings_text", "overtime_max_min")}
+    table = ev.render_compare({"x": old}, {"x": new})
+    row = next(line for line in table.splitlines() if line.startswith("| x |"))
+    assert "- → 0" in row  # 옛 파일에 없는 지표는 '-' 로, 오류 없이
+    assert "-" in ev.render_table({"x": old}).splitlines()[2]
+
+
+# ---------- 결과 파일: 덮어쓰기 방지 · 시나리오별 합치기 ----------
+
+
+def test_saving_twice_in_the_same_second_does_not_overwrite(tmp_path):
+    now = datetime(2026, 11, 26, 10, 0, 0)
+    a = ev.save_results(tmp_path, ["songdo_family"], "2026-11-26", {"songdo_family": {"error": "1"}}, "a", now=now)
+    b = ev.save_results(tmp_path, ["songdo_family"], "2026-11-26", {"songdo_family": {"error": "2"}}, "b", now=now)
+    assert a != b and a.name == "20261126-100000_songdo_family.json" and b.name == "20261126-100000_songdo_family-2.json"
+    assert json.loads(a.read_text(encoding="utf-8"))["results"]["songdo_family"]["error"] == "1"
+    assert b.with_suffix(".md").read_text(encoding="utf-8") == "b"
+    assert ev.result_path(tmp_path, list(ev.SCENARIOS), now).name == "20261126-100000_all.json"
+
+
+def test_summarize_groups_runs_by_scenario(tmp_path):
+    def run(cafe: bool, dups: int):
+        places = [_p(1, "a", "식당"), _p(2, "b", "카페" if cafe else "관광지")]
+        return {**ev.evaluate(_resp(places), CENTER, 1500), "dup_suspects": dups}
+
+    now = datetime(2026, 11, 26, 10, 0, 0)
+    ev.save_results(tmp_path, ["songdo_family"], "2026-11-26", {"songdo_family": run(True, 0)}, "", now=now)
+    ev.save_results(tmp_path, ["songdo_family"], "2026-11-26", {"songdo_family": run(False, 1)}, "", now=now)
+    old = {k: v for k, v in run(True, 0).items() if k not in ("dup_suspects", "mislabels")}  # 새 지표가 없는 옛 결과
+    (tmp_path / "old.json").write_text(json.dumps({"date": "2026-11-26", "results": {"songdo_family": old, "busan_walk": {"error": "x", "elapsed_s": 1}}}), encoding="utf-8")
+    files = ev.expand_paths([str(tmp_path / "*.json")])
+    assert len(files) == 3
+    table = ev.summarize(files)
+    songdo = next(line for line in table.splitlines() if line.startswith("| songdo_family |"))
+    cells = [c.strip() for c in songdo.split("|")[1:-1]]
+    assert cells[1] == "3" and cells[2] == "0"  # 실행 3회, 실패 0
+    assert cells[5] == "1/3회" and cells[6] == "1"  # 구성 미흡 1회, 카페 0곳인 날 1
+    assert cells[9] == "1"  # 중복의심은 값이 있는 2회만 더한다
+    assert next(line for line in table.splitlines() if line.startswith("| busan_walk |")).split("|")[3].strip() == "1"  # 실패 1
+    assert "출발일 2026-11-26" in table
