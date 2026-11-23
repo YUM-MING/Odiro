@@ -213,6 +213,103 @@ def quality_days(m: dict[str, Any]) -> dict[str, list[str]] | None:
     }
 
 
+# ---------- 식사 시각 점검 지표 (묶음 2 M1·M2·M3 의 전후 비교용 휴리스틱. 실패·구성 미흡 판정에는 넣지 않는다) ----------
+
+LUNCH_RULE_START_MAX = "10:30"  # 점심 규칙: 출발이 이 시각 이하인 날만
+DINNER_RULE_START_MAX = "15:00"  # 저녁 규칙: 출발이 이 시각 이하이고
+DINNER_RULE_END_MIN = "19:00"  # 종료가 이 시각 이상인 날만
+DINNER_WINDOW = ("17:00", "20:30")  # 저녁 시간대 식당 없음: 이 사이(양 끝 포함)에 도착하는 식당이 없는 날
+EARLY_DINNER_BEFORE = "17:30"  # 이른 저녁: 식당 2곳 이상인데 마지막 식당 도착이 이 시각 전 (M2 수정 기준과 같은 값)
+FIRST_MEAL_BEFORE = "11:00"  # 11시 전 첫 식당
+
+
+def _min(hhmm: Any) -> int | None:
+    """'HH:MM' → 분. 자정을 넘긴 '24:10' 도 읽는다. 문자열이 아니거나 형식이 다르면 None (추정하지 않는다)."""
+    return _to_min(hhmm) if isinstance(hhmm, str) and hhmm else None
+
+
+def schedule_of(resp: CourseResponse) -> dict[str, Any]:
+    """결과 JSON 에 남길 일정 원자료: 날짜별 시작·종료 시각과 장소별 날짜·순서·카테고리·도착·체류."""
+    req = resp.request
+    days = sorted({p.day for p in resp.places})
+    return {
+        "day_start": {str(d): req.day_starts.get(d) or req.start_time for d in days},  # day_starts 가 없는 날은 start_time
+        "day_end": {str(d): req.end_time for d in days},  # 응답·요청에 날짜별 종료 필드가 없어 end_time 을 쓴다
+        "places": [{"day": p.day, "order": p.order, "name": p.name, "category": p.category, "arrive": p.arrive, "stay_min": p.stay_min} for p in resp.places],
+    }
+
+
+def meal_days(sched: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
+    """날짜별 식사 시각 지표. 일정 원자료가 없으면 None (옛 결과 파일: 도착·체류가 저장돼 있지 않아 N/A).
+
+    값의 뜻: True/False = 해당 여부, None = 그 규칙이 적용되지 않거나(rule False) 시각을 읽을 수 없음(rule None).
+    - dinner_rule: 출발 ≤ 15:00 이고 종료 ≥ 19:00 / no_dinner: 17:00~20:30 도착 식당 없음 / early_dinner: 식당 2곳 이상, 마지막 식당 < 17:30
+    - lunch_rule: 출발 ≤ 10:30 / early_first_meal: 첫 식당 도착 < 11:00 (식당이 없으면 False)
+    - early_end_min: max(0, 종료 − 마지막 일반 방문지의 도착+체류). 숙소는 빼고 본다
+    """
+    if not sched or not sched.get("places"):
+        return None
+    out: dict[str, dict[str, Any]] = {}
+    for day in sorted({str(p["day"]) for p in sched["places"]}, key=int):
+        start, end = _min(sched.get("day_start", {}).get(day)), _min(sched.get("day_end", {}).get(day))
+        body = [p for p in sched["places"] if str(p["day"]) == day and p.get("category") != STAY]
+        times = [(_min(p.get("arrive")), p) for p in body]
+        readable = bool(body) and all(t is not None for t, _ in times)
+        eats = sorted(t for t, p in times if p.get("category") == EAT and t is not None)
+        r: dict[str, Any] = {}
+
+        if start is None or end is None or not readable:
+            r["dinner_rule"] = None
+        else:
+            r["dinner_rule"] = start <= _to_min(DINNER_RULE_START_MAX) and end >= _to_min(DINNER_RULE_END_MIN)
+        if r["dinner_rule"]:
+            lo, hi = (_to_min(x) for x in DINNER_WINDOW)
+            r["no_dinner"] = not any(lo <= t <= hi for t in eats)
+            r["early_dinner"] = len(eats) >= 2 and eats[-1] < _to_min(EARLY_DINNER_BEFORE)
+        else:
+            r["no_dinner"] = r["early_dinner"] = None
+
+        r["lunch_rule"] = None if start is None or not readable else start <= _to_min(LUNCH_RULE_START_MAX)
+        r["early_first_meal"] = (bool(eats) and eats[0] < _to_min(FIRST_MEAL_BEFORE)) if r["lunch_rule"] else None
+
+        if end is None or not readable:
+            r["early_end_min"] = None
+        else:
+            last_end = max(t + int(p.get("stay_min") or 0) for t, p in times)
+            r["early_end_min"] = max(0, end - last_end)
+        out[day] = r
+    return out
+
+
+def meal_days_of(m: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
+    """결과 항목에서 식사 지표: 저장된 meal_days → 저장된 일정 원자료로 계산 → 없으면 None."""
+    if m.get("meal_days") is not None:
+        return m["meal_days"]
+    return meal_days(m.get("schedule"))
+
+
+def meal_summary(ms: list[dict[str, Any]]) -> dict[str, str]:
+    """여러 실행의 날짜별 식사 지표를 합쳐 표 칸 문자열로. '해당 날 수/적용 날 수', 미적용이면 '-', 계산 불가면 'N/A'.
+    조기 종료는 계산 가능한 날의 평균(분)과 날 수."""
+    days = [d for m in ms if (md := meal_days_of(m)) is not None for d in md.values()]
+    if not days:
+        return {k: "N/A" for k in ("no_dinner", "early_dinner", "early_first_meal", "early_end")}
+
+    def ratio(rule: str, key: str) -> str:
+        applied = [d for d in days if d.get(rule)]
+        if applied:
+            return f"{sum(bool(d.get(key)) for d in applied)}/{len(applied)}"
+        return "N/A" if all(d.get(rule) is None for d in days) else "-"  # 전부 계산 불가면 N/A, 아니면 규칙 미적용
+
+    ends = [d["early_end_min"] for d in days if d.get("early_end_min") is not None]
+    return {
+        "no_dinner": ratio("dinner_rule", "no_dinner"),
+        "early_dinner": ratio("dinner_rule", "early_dinner"),
+        "early_first_meal": ratio("lunch_rule", "early_first_meal"),
+        "early_end": f"{sum(ends) / len(ends):.0f} ({len(ends)}일)" if ends else "N/A",
+    }
+
+
 def _q_count(m: dict[str, Any], key: str) -> str:
     q = quality_days(m)
     return "N/A" if q is None else str(len(q[key]))
@@ -246,6 +343,8 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
         "days_lacking": lacking,
         "no_play_days": q["no_play_days"],  # 품질 점검용 (구성 미흡 판정에는 안 넣음)
         "crowded_days": q["crowded_days"],
+        "schedule": (sched := schedule_of(resp)),  # 날짜별 시작·종료, 장소별 도착·체류 (나중에 지표를 다시 계산할 수 있게)
+        "meal_days": meal_days(sched),  # 식사 시각 점검용 (구성 미흡 판정에는 안 넣음)
         "overtime": {str(d): m for d, m in over.items()},
         "overtime_max_min": max(over.values(), default=0),
         "est_cost": resp.meta.est_cost_total,
@@ -273,14 +372,16 @@ def _sum_known(ms: list[dict[str, Any]], key: str) -> str:
 
 def render_table(results: dict[str, dict[str, Any]]) -> str:
     head = (
-        "| 시나리오 | 장소 | 미확인 | 반경밖 | 구성(식당·카페·볼거리) | 예산 | 종료초과 | 중복의심 | 분류의심 | 볼거리0일 | 식·카3+일 | 날씨 | 경고 | 시간(초) |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "| 시나리오 | 장소 | 미확인 | 반경밖 | 구성(식당·카페·볼거리) | 예산 | 종료초과 | 중복의심 | 분류의심 | 볼거리0일 | 식·카3+일 "
+        "| 저녁식당없음 | 이른저녁 | 11시전식당 | 조기종료(분) | 날씨 | 경고 | 시간(초) |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
     rows = []
     for key, m in results.items():
         if m.get("error"):
-            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | | | | | | {m.get('elapsed_s', '')} |")
+            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | | | | | | | | | | {m.get('elapsed_s', '')} |")
             continue
+        meal = meal_summary([m])
         comp = comp_text(m["comp"]) + ("" if m["comp_ok"] else " ⚠구성 미흡")
         out = f"{m['outside']}/{m['places']} ({m['outside_ratio']:.0%})"
         budget = "초과" if m["over_budget"] else "ok"
@@ -288,6 +389,7 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
         rows.append(
             f"| {key} | {m['places']} | {m['unverified']} | {out} | {comp} | {budget} | {late} | "
             f"{m.get('dup_suspects', '-')} | {m.get('mislabels', '-')} | {_q_count(m, 'no_play_days')} | {_q_count(m, 'crowded_days')} | "
+            f"{meal['no_dinner']} | {meal['early_dinner']} | {meal['early_first_meal']} | {meal['early_end']} | "
             f"{m['weather']} | {m['warnings']} | {m['elapsed_s']} |"
         )
     ok = [m for m in results.values() if not m.get("error")]
@@ -300,7 +402,8 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
             f"{n_out}/{n_places} ({(n_out / n_places if n_places else 0):.0%}) | 구성 미흡 {sum(not m['comp_ok'] for m in ok)}건 | "
             f"초과 {sum(m['over_budget'] for m in ok)}건 | {sum(bool(m.get('overtime_max_min')) for m in ok)}건 | "
             f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | {_sum_q(ok, 'no_play_days')} | {_sum_q(ok, 'crowded_days')} | "
-            f"| {sum(m['warnings'] for m in ok)} | 평균 {sum(times) / len(times):.1f} · 최대 {times[-1]} |"
+            + " | ".join(meal_summary(ok).values())
+            + f" | | {sum(m['warnings'] for m in ok)} | 평균 {sum(times) / len(times):.1f} · 최대 {times[-1]} |"
         )
     return head + "\n".join(rows)
 
@@ -365,15 +468,15 @@ def summarize(files: list[Path]) -> str:
         "",
         (
             "| 시나리오 | 실행 | 실패 | 미확인 합 | 반경밖 | 구성 미흡 | 카페 0곳인 날 | 예산 초과 | 종료초과 | 중복의심 합 | 분류의심 합 "
-            "| 볼거리 0곳인 날 | 식당·카페 3곳+ 날 | 경고 합 | 시간 평균·최대(초) |"
+            "| 볼거리 0곳인 날 | 식당·카페 3곳+ 날 | 저녁 식당 없는 날 | 이른 저녁 날 | 11시 전 첫 식당 날 | 조기 종료 평균(분) | 경고 합 | 시간 평균·최대(초) |"
         ),
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for key in sorted(runs):
         ms = runs[key]
         ok = [m for m in ms if not m.get("error")]
         if not ok:
-            lines.append(f"| {key} | {len(ms)} | {len(ms)} | | | | | | | | | | | | |")
+            lines.append(f"| {key} | {len(ms)} | {len(ms)} | | | | | | | | | | | | | | | | |")
             continue
         n_places = sum(m["places"] for m in ok)
         no_cafe = sum(1 for m in ok for c in m["comp"].values() if c.get(CAFE, 0) == 0)
@@ -383,7 +486,8 @@ def summarize(files: list[Path]) -> str:
             f"{sum(m['outside'] for m in ok)}/{n_places} | {sum(not m['comp_ok'] for m in ok)}/{len(ok)}회 | {no_cafe} | "
             f"{sum(m['over_budget'] for m in ok)}/{len(ok)}회 | {sum(bool(m.get('overtime_max_min')) for m in ok)}/{len(ok)}회 | "
             f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | {_sum_q(ok, 'no_play_days')} | {_sum_q(ok, 'crowded_days')} | "
-            f"{sum(m['warnings'] for m in ok)} | {sum(times) / len(times):.1f} · {max(times)} |"
+            + " | ".join(meal_summary(ok).values())
+            + f" | {sum(m['warnings'] for m in ok)} | {sum(times) / len(times):.1f} · {max(times)} |"
         )
     return "\n".join(lines)
 

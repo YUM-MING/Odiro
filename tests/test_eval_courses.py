@@ -237,3 +237,99 @@ def test_summarize_shows_quality_day_columns(tmp_path):
     assert "볼거리 0곳인 날" in head and "식당·카페 3곳+ 날" in head
     cells = [c.strip() for c in next(line for line in table.splitlines() if line.startswith("| busan_walk |")).split("|")[1:-1]]
     assert cells[11] == "1" and cells[12] == "1"  # 2회 중 한 번만 해당
+
+
+# ---------- 식사 시각 점검 지표 (묶음 2 전후 비교용, 구성 미흡 판정과 별개) ----------
+
+
+def _sched(start, end, places, day_start=None):
+    days = sorted({p[0] for p in places})
+    return {
+        "day_start": {str(d): (day_start or {}).get(d, start) for d in days},
+        "day_end": {str(d): end for d in days},
+        "places": [{"day": d, "order": i + 1, "name": f"p{i}", "category": c, "arrive": a, "stay_min": s} for i, (d, c, a, s) in enumerate(places)],
+    }
+
+
+def _day(start, end, places, day="1"):
+    return ev.meal_days(_sched(start, end, places))[day]
+
+
+def _resp_times(places, start="11:00", end="20:00"):
+    r = CourseResponse(course_id="c", request=CourseRequest(region="성수동", date="2026-11-26", start_time=start, end_time=end),
+                       places=places, legs=[], answer_md="")
+    r.meta.est_cost_total = 10_000
+    return r
+
+
+def test_meal_seongsu_reproduction():
+    # 11/21 성수동: 11:00~20:00, 마지막 식당 16:07, 17:37 종료
+    places = [_p(1, "성수동카페거리", "놀거리", arrive="11:00", stay_min=60), _p(2, "하노이별", "식당", arrive="12:19", stay_min=90),
+              _p(3, "카페서울숲", "카페", arrive="13:53", stay_min=60), _p(4, "메모레", "카페", arrive="15:01", stay_min=60),
+              _p(5, "채선당", "식당", arrive="16:07", stay_min=90)]
+    m = ev.evaluate(_resp_times(places), CENTER, 1500)
+    d1 = m["meal_days"]["1"]
+    assert d1["no_dinner"] is True and d1["early_dinner"] is True and d1["early_end_min"] == 143
+    assert m["comp_ok"] and m["schedule"]["day_start"] == {"1": "11:00"} and m["schedule"]["places"][4]["arrive"] == "16:07"
+    assert ev.meal_summary([m]) == {"no_dinner": "1/1", "early_dinner": "1/1", "early_first_meal": "-", "early_end": "143 (1일)"}
+
+
+def test_meal_dinner_window_and_early_dinner_are_separate():
+    two_eats_1715 = _day("11:00", "20:00", [(1, "식당", "12:00", 60), (1, "카페", "14:00", 60), (1, "식당", "17:15", 60)])
+    assert (two_eats_1715["no_dinner"], two_eats_1715["early_dinner"]) == (False, True)
+    late = _day("11:00", "20:00", [(1, "식당", "12:00", 60), (1, "식당", "18:30", 60)])
+    assert (late["no_dinner"], late["early_dinner"]) == (False, False)
+    one_eat_1600 = _day("11:00", "20:00", [(1, "카페", "12:00", 60), (1, "식당", "16:00", 60)])
+    assert (one_eat_1600["no_dinner"], one_eat_1600["early_dinner"]) == (True, False)  # 식당 2곳 미만이면 이른 저녁 아님
+
+
+def test_meal_lunch_rule_boundaries():
+    assert _day("10:30", "20:00", [(1, "식당", "10:59", 60), (1, "카페", "12:30", 60)])["early_first_meal"] is True
+    at_1031 = _day("10:31", "20:00", [(1, "식당", "10:59", 60)])
+    assert at_1031["lunch_rule"] is False and at_1031["early_first_meal"] is None  # 출발 > 10:30 → 미적용
+    assert _day("11:00", "20:00", [(1, "식당", "11:30", 60)])["early_first_meal"] is None
+
+
+def test_meal_dinner_rule_boundaries():
+    at_1500 = _day("15:00", "20:00", [(1, "식당", "16:00", 60)])
+    assert at_1500["lunch_rule"] is False and at_1500["dinner_rule"] is True and at_1500["no_dinner"] is True
+    assert _day("15:01", "20:00", [(1, "식당", "16:00", 60)])["dinner_rule"] is False
+    end_18 = _day("11:00", "18:00", [(1, "식당", "12:00", 60)])
+    assert end_18["dinner_rule"] is False and end_18["no_dinner"] is None
+
+
+def test_meal_early_end_is_zero_when_course_runs_over():
+    assert _day("11:00", "20:00", [(1, "식당", "19:30", 60)])["early_end_min"] == 0  # 20:30 종료 → 초과는 종료초과 지표가 다룬다
+
+
+def test_meal_lodging_is_ignored_for_last_place():
+    md = ev.meal_days(_sched("10:00", "21:00", [(1, "식당", "12:00", 60), (1, "카페", "14:00", 60), (1, "숙소", "20:30", 60),
+                                                (2, "관광지", "10:00", 60), (2, "식당", "18:00", 60)]))
+    assert md["1"]["early_end_min"] == 21 * 60 - 15 * 60  # 숙소(20:30) 가 아니라 카페가 끝나는 15:00 기준
+    assert md["2"]["early_end_min"] == 21 * 60 - 19 * 60
+
+
+def test_meal_missing_times_are_na_and_excluded_from_average():
+    md = ev.meal_days(_sched("11:00", "20:00", [(1, "식당", "", 60), (2, "식당", "12:00", 60), (2, "식당", "18:00", 60)]))
+    assert md["1"]["dinner_rule"] is None and md["1"]["early_end_min"] is None
+    assert md["2"]["early_end_min"] == 60
+    assert ev.meal_summary([{"meal_days": md}])["early_end"] == "60 (1일)"  # 계산 가능한 날만 평균
+    assert ev.meal_days(_sched("bad", "20:00", [(1, "식당", "12:00", 60)]))["1"]["dinner_rule"] is None
+
+
+def test_meal_old_results_without_schedule_are_na(tmp_path):
+    # 옛 결과 파일: 장소별 도착·체류가 저장돼 있지 않아 복원 불가 → N/A, 오류 없음
+    old = {"places": 2, "unverified": 0, "outside": 0, "comp_ok": True, "over_budget": False, "warnings": 0, "elapsed_s": 1.0,
+           "comp": {"1": {"식당": 1, "카페": 1, "볼거리": 0}}, "titles": ["D1-1 a[식당]", "D1-2 b[카페]"]}
+    assert ev.meal_days_of(old) is None
+    assert set(ev.meal_summary([old]).values()) == {"N/A"}
+    (tmp_path / "old.json").write_text(json.dumps({"date": "2026-11-26", "results": {"seongsu_walk": old}}), encoding="utf-8")
+    row = next(line for line in ev.summarize([tmp_path / "old.json"]).splitlines() if line.startswith("| seongsu_walk |"))
+    assert row.count("N/A") == 4
+
+
+def test_meal_metrics_do_not_change_composition_or_failure():
+    places = [_p(1, "a", "식당", arrive="11:00", stay_min=60), _p(2, "b", "카페", arrive="12:30", stay_min=60)]
+    m = ev.evaluate(_resp_times(places, start="10:00", end="20:00"), CENTER, 1500)
+    assert m["comp_ok"] and m["days_lacking"] == [] and m["unverified"] == 0
+    assert m["meal_days"]["1"]["no_dinner"] is True  # 점검 지표에만 잡힌다
