@@ -107,7 +107,8 @@ class TraceStep(BaseModel):
     node: str
     status: Literal["start", "done", "skip", "error"]
     ms: int = 0
-    detail: str = ""
+    detail: str = ""  # 사용자 화면(진행 상태)에 보이는 요약
+    debug: str = ""  # 내부 판단 기록(식사 순서·저녁 식당 등). 최종 meta.trace 에만 남고 진행 이벤트·화면에는 내보내지 않는다
 
 
 class CourseMeta(BaseModel):

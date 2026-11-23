@@ -17,24 +17,32 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from odiro.data.ingest.common import TOUR_DIR, read_jsonl
+from odiro.tools.tour_intro import https_image
 
 OUT = ROOT / "data" / "tour_intro.json"
 FIELDS = ("rest_date", "use_time", "use_fee", "parking", "parking_fee")
 
 
 def build() -> list[dict]:
+    """장소마다 한 줄: 이름·좌표 + 이용 정보(있는 항목만) + 대표 이미지 img(있으면, https).
+    이용 정보가 없어도 이미지가 있으면 넣는다 (지도 정보 창 이미지용). 둘 다 없으면 넣지 않는다."""
     rows: list[dict] = []
-    for intro_path in sorted(TOUR_DIR.glob("intro_*.jsonl")):
-        code = intro_path.stem.removeprefix("intro_")
-        meta = {p["content_id"]: p for p in read_jsonl(TOUR_DIR / f"area_{code}.jsonl")}
+    for area_path in sorted(TOUR_DIR.glob("area_*.jsonl")):
+        code = area_path.stem.removeprefix("area_")
         # 갱신은 뒤에 덧붙이므로 같은 장소가 여러 줄일 수 있다 → 마지막 줄만
-        latest = {r["content_id"]: r for r in read_jsonl(intro_path)}
-        for r in latest.values():
-            p = meta.get(r["content_id"])
-            vals = {k: r[k] for k in FIELDS if r.get(k)}
-            if not p or not vals or p.get("lat") is None or p.get("lng") is None:
+        meta = {p["content_id"]: p for p in read_jsonl(area_path)}
+        intro_path = TOUR_DIR / f"intro_{code}.jsonl"
+        latest = {r["content_id"]: r for r in read_jsonl(intro_path)} if intro_path.exists() else {}
+        for cid, p in meta.items():
+            if p.get("lat") is None or p.get("lng") is None:
                 continue
-            rows.append({"n": p["title"], "lat": round(p["lat"], 5), "lng": round(p["lng"], 5), **vals})
+            r = latest.get(cid, {})
+            vals = {k: r[k] for k in FIELDS if r.get(k)}
+            # firstimage(약 500x333, 정보 창 폭 420px 에 맞음). 없을 때만 썸네일 firstimage2(약 150x100)
+            img = https_image(p.get("image") or p.get("image_thumb"))
+            if not vals and not img:
+                continue
+            rows.append({"n": p["title"], "lat": round(p["lat"], 5), "lng": round(p["lng"], 5), **vals, **({"img": img} if img else {})})
     return rows
 
 

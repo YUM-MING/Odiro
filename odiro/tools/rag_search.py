@@ -158,6 +158,24 @@ def search(
     return out
 
 
+def warm() -> dict[str, Any]:
+    """서버 시작 때 벡터 DB 를 미리 연다 (콜드스타트 첫 요청의 retrieve 지연 줄이기).
+
+    Chroma 클라이언트를 만들고, 컬렉션에 저장된 임베딩 하나로 최근접 검색을 한 번 해 HNSW 색인(수백 MB)을 메모리에 올린다.
+    OpenAI 임베딩·LLM 등 외부 유료 API 는 부르지 않는다 (질의 임베딩을 새로 만들지 않고 저장된 것을 쓴다). 시군구 표도 읽어 둔다.
+    """
+    _sigungu_table()
+    with _VS_LOCK:
+        vs = get_vectorstore()
+    col = vs._collection  # langchain_chroma 내부 컬렉션 (임베딩 함수를 거치지 않는 질의용)
+    got = col.get(limit=1, include=["embeddings"])
+    embs = got.get("embeddings")
+    if embs is None or len(embs) == 0:
+        return {"docs": 0}
+    col.query(query_embeddings=[list(embs[0])], n_results=1)
+    return {"docs": col.count()}
+
+
 @tool
 def rag_search(query: str, moods: list[str] | None = None, region: str | None = None, k: int = 5) -> str:
     """큐레이션 데이터(블로그 글·관광지 설명)에서 분위기 조건에 맞는 장소·글을 찾는다.

@@ -22,6 +22,8 @@ COPY data ./data
 COPY cache ./cache
 
 ENV PORT=8080
+# 시작 예열: 포트를 열기 전에 그래프 모듈 import·벡터 DB 색인 로딩 (외부 유료 API 호출 없음, 최대 90초, 실패해도 서버는 뜬다)
+ENV ODIRO_WARMUP=1
 EXPOSE 8080
 # 그래프·Chroma 로딩에 수 초 걸리므로 워커 1개, 타임아웃 넉넉히
 CMD ["sh", "-c", "uvicorn odiro.api.main:app --host 0.0.0.0 --port ${PORT} --workers 1 --timeout-keep-alive 75"]

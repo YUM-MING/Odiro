@@ -38,8 +38,8 @@ def _table() -> dict[str, list[dict[str, Any]]]:
     return out
 
 
-def find_intro(name: str, lat: float, lng: float) -> dict[str, str] | None:
-    """이름이 같고 300m 안에 있는 TourAPI 장소의 이용 정보. 없으면 None."""
+def _match(name: str, lat: float, lng: float) -> dict[str, Any] | None:
+    """이름이 같고 300m 안에 있는 TourAPI 장소 줄 (가장 가까운 것). 없으면 None."""
     key = _norm(name)
     if not key:
         return None
@@ -48,6 +48,32 @@ def find_intro(name: str, lat: float, lng: float) -> dict[str, str] | None:
         d = _dist_m(lat, lng, r["lat"], r["lng"])
         if d <= MAX_DIST_M and (best is None or d < best[0]):
             best = (d, r)
-    if not best:
-        return None
-    return {k: v for k, v in best[1].items() if k not in ("n", "lat", "lng")}
+    return best[1] if best else None
+
+
+def find_intro(name: str, lat: float, lng: float) -> dict[str, str] | None:
+    """이름이 같고 300m 안에 있는 TourAPI 장소의 이용 정보. 없으면 None (이미지만 있는 줄도 None)."""
+    r = _match(name, lat, lng)
+    vals = {k: v for k, v in (r or {}).items() if k not in ("n", "lat", "lng", "img")}
+    return vals or None
+
+
+# TourAPI 이미지 호스트. 수집 데이터의 89% 가 이미 이 호스트의 https 주소라 https 지원이 확인됨 → http 도 https 로 바꿔 쓴다
+HTTPS_IMAGE_HOSTS = ("tong.visitkorea.or.kr",)
+
+
+def https_image(url: str | None) -> str:
+    """https 로 보여 줄 수 있는 이미지 주소. https 는 그대로, http 는 https 지원이 확인된 호스트만 바꾸고, 나머지는 빈 문자열."""
+    if not url:
+        return ""
+    if url.startswith("https://"):
+        return url
+    if url.startswith("http://") and url[len("http://"):].split("/", 1)[0] in HTTPS_IMAGE_HOSTS:
+        return "https://" + url[len("http://"):]
+    return ""
+
+
+def find_image(name: str, lat: float, lng: float) -> str | None:
+    """이름이 같고 300m 안에 있는 TourAPI 장소의 대표 이미지(firstimage, https). 없으면 None."""
+    r = _match(name, lat, lng)
+    return https_image((r or {}).get("img")) or None

@@ -946,7 +946,7 @@ def test_m1_meal_order_skipped_when_route_gets_much_longer(monkeypatch):
            _w("식당2", "식당", 37.55, 127.002), _w("동쪽볼거리", "관광지", 37.55, 127.017)]
     out = _opt(lay)
     assert [p["name"] for p in out["places"]] == ["서쪽볼거리", "식당1", "카페", "식당2", "동쪽볼거리"]
-    assert "식사 순서" in out["trace"][-1]["detail"]  # 적용하지 못한 이유를 남긴다
+    assert "식사 순서" in out["trace"][-1]["debug"]  # 적용하지 못한 이유를 남긴다
 
 
 def test_m1_keeps_fixed_order_and_edit_flow(monkeypatch):
@@ -1287,7 +1287,7 @@ def test_c3_no_spare_keeps_course_and_only_free_time_warning(monkeypatch):
     out = _opt(_gangneung_d1(), start="09:00", end="20:00", transport="car", poi_docs=_GN_POOL, spares=[])
     assert len(out["places"]) == 4
     assert [w for w in out["warnings"] if "자유 시간" in w] == [f"저녁 식사 전 자유 시간 {_free_of(out, '초당순두부집')}분이 있어요"]
-    assert "빈 시간 보충: 예비 없음" in out["trace"][-1]["detail"]
+    assert "빈 시간 보충: 예비 없음" in out["trace"][-1]["debug"]
 
 
 def _fixed_gap_day(last_stay):
@@ -1312,7 +1312,7 @@ def test_c3_reverted_when_filler_passes_end_time(monkeypatch):
     out = _opt(_fixed_gap_day(115), start="11:00", end="19:00", poi_docs=pool, spares=spares)
     assert [p["name"] for p in out["places"]] == ["볼거리", "점심", "카페", "저녁집"]
     assert out["places"][-1]["arrive"] == "17:30" and len(out["legs"]) == 3
-    assert "빈 시간 보충: 종료 초과로 되돌림" in out["trace"][-1]["detail"]
+    assert "빈 시간 보충: 종료 초과로 되돌림" in out["trace"][-1]["debug"]
     assert not any("일정이 종료 시각" in w for w in out["warnings"])
 
 
@@ -1363,7 +1363,7 @@ def test_c5_trace_records_m4_reason_per_day_without_new_warnings(monkeypatch):
 
     def detail(places, **kw):
         out = _opt(places, poi_docs=kw.pop("poi_docs", pool), **kw)
-        return out["trace"][-1]["detail"], out["warnings"]
+        return out["trace"][-1]["debug"], out["warnings"]
 
     d, w = detail(_fixed_gap_day(60), start="11:00", end="18:00")
     assert "Day 1 저녁 식당: 저녁 규칙 아님" in d and w == []
@@ -1403,7 +1403,7 @@ def test_cap_c3_not_applied_when_trip_day_already_at_five(monkeypatch):
     out = _opt(_cap_day(2), start="10:00", end="20:00", poi_docs=[_food_poi("저녁집", 37.55, 127.003)], spares=spares, request={"mode": "trip"})
     names = [p["name"] for p in out["places"]]
     assert "저녁집" in names and "전시관" not in names and len(names) == 5
-    assert "Day 1 빈 시간 보충: 장소 수 상한" in out["trace"][-1]["detail"]
+    assert "Day 1 빈 시간 보충: 장소 수 상한" in out["trace"][-1]["debug"]
     assert sum("자유 시간" in w for w in out["warnings"]) == 1  # 자유 시간 경고는 그대로 한 번
     # 일반 장소 3곳 + 저녁 = 4곳 → C3 적용(5곳)
     out = _opt(_cap_day(1), start="10:00", end="20:00", poi_docs=[_food_poi("저녁집", 37.55, 127.003)], spares=spares, request={"mode": "trip"})
@@ -1416,7 +1416,7 @@ def test_cap_outing_uses_six(monkeypatch):
     pool = [_food_poi("저녁집", 37.55, 127.003)]
     out = _opt(_cap_day(3), start="10:00", end="20:00", poi_docs=pool, spares=spares)  # 5 + 저녁 = 6 → C3 미적용
     assert len(out["places"]) == 6 and "전시관" not in [p["name"] for p in out["places"]]
-    assert "빈 시간 보충: 장소 수 상한" in out["trace"][-1]["detail"]
+    assert "빈 시간 보충: 장소 수 상한" in out["trace"][-1]["debug"]
     out = _opt(_cap_day(2), start="10:00", end="20:00", poi_docs=pool, spares=spares)  # 4 + 저녁 = 5 → C3 적용(6곳)
     assert len(out["places"]) == 6 and "전시관" in [p["name"] for p in out["places"]]
 
@@ -1426,11 +1426,11 @@ def test_cap_m4_not_added_when_day_already_full(monkeypatch):
     pool = [_food_poi("저녁집", 37.55, 127.003)]
     out = _opt(_cap_day(3, cafe_stay=60), start="10:00", end="20:00", poi_docs=pool, request={"mode": "trip"})  # 5곳 = 여행 상한
     assert "저녁집" not in [p["name"] for p in out["places"]]
-    assert "Day 1 저녁 식당: 장소 수 상한" in out["trace"][-1]["detail"]
+    assert "Day 1 저녁 식당: 장소 수 상한" in out["trace"][-1]["debug"]
     assert not any("저녁" in w for w in out["warnings"])  # 경고 문구는 늘리지 않는다
     assert len(calls) == len(out["legs"])  # 상한에 걸리면 새 구간도 계산하지 않는다
     out = _opt(_cap_day(4, cafe_stay=60), start="10:00", end="20:00", poi_docs=pool)  # 당일 6곳 = 상한
-    assert "Day 1 저녁 식당: 장소 수 상한" in out["trace"][-1]["detail"] and len(out["places"]) == 6
+    assert "Day 1 저녁 식당: 장소 수 상한" in out["trace"][-1]["debug"] and len(out["places"]) == 6
 
 
 # ---------- 묶음 2-D: D1 자차 M4 후보 반경 · D2 M3 최대 2곳 · D3 같은 메뉴 판정 ----------
@@ -1458,7 +1458,7 @@ def test_d1_car_candidate_beyond_8km_of_both_is_no_candidate(monkeypatch):
     far = _food_poi("먼식당", 37.80, 127.56)  # 동선 중심·마지막 장소 모두 8km 밖
     out = _opt(_preset_d1_after_c(), start="11:00", end="20:00", transport="car", poi_docs=[], dinner_pool=[far])
     assert "먼식당" not in [p["name"] for p in out["places"]]
-    assert "Day 1 저녁 식당: 후보 없음" in out["trace"][-1]["detail"]
+    assert "Day 1 저녁 식당: 후보 없음" in out["trace"][-1]["debug"]
 
 
 def test_d1_walk_keeps_hub_radius(monkeypatch):
@@ -1573,7 +1573,7 @@ def test_e1_gangneung_d2_fixed_order_lunch_pushed_to_1100_by_stretch(monkeypatch
     got = out["places"]
     assert [p["name"] for p in got] == [p["name"] for p in ps]  # 순서 그대로
     assert got[0]["stay_min"] == 112 and got[1]["arrive"] == "11:00"  # +22분
-    assert "Day 1 점심 전 연장: +22분" in out["trace"][-1]["detail"]
+    assert "Day 1 점심 전 연장: +22분" in out["trace"][-1]["debug"]
     assert len(calls) == len(out["legs"]) == 4  # 구간은 그대로, 경로 호출 불변
 
 
@@ -1591,7 +1591,7 @@ def test_e1_not_enough_keeps_max_and_records(monkeypatch):
     day = [_w("볼A", "관광지", 37.55, 127.000, 30), _w("점심", "식당", 37.55, 127.002)]
     out = _opt(day, start="09:00", end="18:00")  # 09:40 도착 → +30 으로 10:10
     assert out["places"][0]["stay_min"] == 60 and out["places"][1]["arrive"] == "10:10"
-    assert "Day 1 점심 전 연장: +30분(부족, 첫 식당 10:10)" in out["trace"][-1]["detail"]
+    assert "Day 1 점심 전 연장: +30분(부족, 첫 식당 10:10)" in out["trace"][-1]["debug"]
     assert not any("점심" in w for w in out["warnings"])  # 사용자 경고는 늘리지 않는다
 
 
@@ -1610,21 +1610,21 @@ def test_e1_reverted_when_end_time_or_dinner_after_2030(monkeypatch):
     day = [_w("볼", "관광지", 37.55, 127.000, 100), _w("점심", "식당", 37.55, 127.002)]
     out = _opt(day, start="09:00", end="11:55")  # 연장하면 12:00 끝 > 11:55
     assert out["places"][0]["stay_min"] == 100 and out["places"][1]["arrive"] == "10:50"
-    assert "Day 1 점심 전 연장: 되돌림(종료 초과)" in out["trace"][-1]["detail"]
+    assert "Day 1 점심 전 연장: 되돌림(종료 초과)" in out["trace"][-1]["debug"]
     late = [{**p, "fixed_order": True} for p in day + [_w("긴체험", "관광지", 37.55, 127.003, 495), _w("저녁", "식당", 37.55, 127.004)]]
     out = _opt(late, start="09:00", end="22:00")  # 저녁 20:25 → 연장하면 20:35
     assert [p["name"] for p in out["places"]] == ["볼", "점심", "긴체험", "저녁"] and len(out["legs"]) == 3
     assert out["places"][-1]["arrive"] == "20:25" and out["places"][0]["stay_min"] == 100
-    assert "Day 1 점심 전 연장: 되돌림(저녁 20:30 초과)" in out["trace"][-1]["detail"]
+    assert "Day 1 점심 전 연장: 되돌림(저녁 20:30 초과)" in out["trace"][-1]["debug"]
 
 
 def test_e1_not_applied_for_late_start_or_edit(monkeypatch):
     _const_routes(monkeypatch, 10)
     day = [_w("볼", "관광지", 37.55, 127.000, 30), _w("점심", "식당", 37.55, 127.002), _w("카페", "카페", 37.55, 127.003)]
     out = _opt(day, start="10:45", end="18:00")  # 점심 규칙 아님 (출발 > 10:30)
-    assert out["places"][0]["stay_min"] == 30 and "Day 1 점심 전 연장: 점심 규칙 아님" in out["trace"][-1]["detail"]
+    assert out["places"][0]["stay_min"] == 30 and "Day 1 점심 전 연장: 점심 규칙 아님" in out["trace"][-1]["debug"]
     out = _opt([dict(p) for p in day], start="09:00", end="18:00", instruction="시작을 9시로")
-    assert out["places"][0]["stay_min"] == 30 and "Day 1 점심 전 연장: 수정 흐름" in out["trace"][-1]["detail"]
+    assert out["places"][0]["stay_min"] == 30 and "Day 1 점심 전 연장: 수정 흐름" in out["trace"][-1]["debug"]
 
 
 def _car_dinner_day():
@@ -1646,7 +1646,7 @@ def test_e2_car_new_leg_over_30_minutes_reverts_dinner(monkeypatch):
     calls = _table_routes(monkeypatch, _car_table(62, 10))  # 가평 귀곡산장형: 새 구간 62분
     out = _opt(_car_dinner_day(), start="11:00", end="20:00", transport="car", poi_docs=[_CAR_B])
     assert "B식당" not in [p["name"] for p in out["places"]] and len(out["legs"]) == 4
-    assert "Day 1 저녁 식당: 이동 시간 초과" in out["trace"][-1]["detail"]
+    assert "Day 1 저녁 식당: 이동 시간 초과" in out["trace"][-1]["debug"]
     assert not any("저녁" in w for w in out["warnings"])  # 경고 문구는 늘리지 않는다
     assert len(calls) == len(out["legs"]) + 2  # 다음 후보는 시도하지 않는다 (C2 되돌림 날과 같은 호출 수)
 
@@ -1655,21 +1655,21 @@ def test_e2_split_of_existing_long_leg_is_kept(monkeypatch):
     _table_routes(monkeypatch, _car_table(25, 20))  # 기존 볼2→숙소 40분이 25분·20분으로 나뉨 → 각각 30분 이하
     out = _opt(_car_dinner_day(), start="11:00", end="20:00", transport="car", poi_docs=[_CAR_B])
     names = [p["name"] for p in out["places"]]
-    assert names[-2:] == ["B식당", "숙소"] and "Day 1 저녁 식당: 추가(B식당)" in out["trace"][-1]["detail"]
+    assert names[-2:] == ["B식당", "숙소"] and "Day 1 저녁 식당: 추가(B식당)" in out["trace"][-1]["debug"]
 
 
 def test_e2_walk_new_leg_over_20_minutes_reverts(monkeypatch):
     day = _ikseon_day()
     _table_routes(monkeypatch, {(_pt(day[-1]), (37.5749, 126.9908)): 25}, default=3)
     out = _opt(day, start="11:00", end="19:00", poi_docs=[_food_poi("동네백반", 37.5749, 126.9908)])
-    assert len(out["places"]) == 4 and "Day 1 저녁 식당: 이동 시간 초과" in out["trace"][-1]["detail"]
+    assert len(out["places"]) == 4 and "Day 1 저녁 식당: 이동 시간 초과" in out["trace"][-1]["debug"]
 
 
 def test_e2_lodging_arrival_past_end_reverts(monkeypatch):
     _table_routes(monkeypatch, _car_table(25, 20))  # 저녁 17:55~18:55, 숙소 19:15 > 종료 19:00 (덧붙이기 전 숙소 18:10)
     out = _opt(_car_dinner_day(), start="11:00", end="19:00", transport="car", poi_docs=[_CAR_B])
     assert "B식당" not in [p["name"] for p in out["places"]]
-    assert "Day 1 저녁 식당: 숙소 도착 초과" in out["trace"][-1]["detail"]
+    assert "Day 1 저녁 식당: 숙소 도착 초과" in out["trace"][-1]["debug"]
 
 
 def test_e2_lodging_already_late_and_not_later_keeps_filler(monkeypatch):
@@ -1680,14 +1680,14 @@ def test_e2_lodging_already_late_and_not_later_keeps_filler(monkeypatch):
     out = _opt(day, start="11:00", end="19:00", spares=[_spare("전시관", "관광지", 37.55, 127.0025)], request={"mode": "trip"})
     names = [p["name"] for p in out["places"]]
     assert "전시관" in names and out["places"][-1]["arrive"] == "19:10"
-    assert "Day 1 빈 시간 보충: 적용(전시관)" in out["trace"][-1]["detail"]
+    assert "Day 1 빈 시간 보충: 적용(전시관)" in out["trace"][-1]["debug"]
 
 
 def test_e3_trace_records_m3_moves_and_e1_result_per_day(monkeypatch):
     _route_by_distance(monkeypatch)
 
     def detail(places, **kw):
-        return _opt(places, **kw)["trace"][-1]["detail"]
+        return _opt(places, **kw)["trace"][-1]["debug"]
 
     assert "Day 1 점심 순서: 2곳 옮김(11시 이후)" in detail(_gn_d1_draft(), start="09:00", end="20:00", transport="car")
     assert "Day 1 점심 순서: 1곳 옮김(11시 이후)" in detail(_m3_day(), start="09:00", end="18:00")
@@ -1704,3 +1704,65 @@ def test_e3_trace_records_m3_moves_and_e1_result_per_day(monkeypatch):
     trip = [{**p, "day": 1} for p in _m3_day()] + [{**p, "day": 2, "name": p["name"] + "2", "kakao_place_id": p["name"] + "2"} for p in _m3_day()]
     d = detail(trip, start="09:00", end="18:00")
     assert "Day 1 점심 순서:" in d and "Day 2 점심 순서:" in d and "Day 2 점심 전 연장:" in d
+
+
+# ---------- F2: 내부 판단 기록은 meta.trace 의 debug 에만 (화면·진행 이벤트에는 사용자용 요약만) ----------
+
+_JUDGEMENT_WORDS = ("점심 순서", "점심 전 연장", "저녁 식당", "빈 시간 보충", "식사 순서")
+
+
+def test_f2_optimize_detail_is_user_summary_and_debug_keeps_judgements(monkeypatch):
+    _const_routes(monkeypatch, 10)
+    out = _opt(_fixed_gap_day(60), start="09:00", end="20:00", poi_docs=[_food_poi("저녁집", 37.55, 127.003)])
+    step = out["trace"][-1]
+    assert step["detail"].endswith("분") and "구간, 이동 총" in step["detail"]
+    assert not any(w in step["detail"] for w in _JUDGEMENT_WORDS)
+    assert all(w in step["debug"] for w in ("점심 순서", "점심 전 연장", "저녁 식당"))
+
+
+def test_f2_progress_events_drop_debug_but_final_meta_trace_keeps_it():
+    import json as _json
+
+    from odiro.agent import run
+    from odiro.api import main
+    from odiro.api.schemas import CourseRequest, CourseResponse, TraceStep
+
+    step = {"node": "optimize_route", "status": "done", "ms": 5, "detail": "3곳 2구간, 이동 총 20분", "debug": "Day 1 저녁 식당: 후보 없음"}
+
+    class FakeGraph:
+        def stream(self, state, stream_mode):
+            yield {"optimize_route": {"trace": [step]}}
+
+    seen: list[TraceStep] = []
+    merged = run._stream(FakeGraph(), {"trace": []}, ("optimize_route",), seen.append)
+    done = [s for s in seen if s.status == "done"]
+    assert done and done[0].detail == step["detail"] and done[0].debug == ""  # 진행 이벤트: 요약만
+    resp = run._to_response({**merged, "places": [], "legs": []}, CourseRequest(region="성수동", date="2026-11-26"), 10)
+    assert resp.meta.trace[-1].debug == "Day 1 저녁 식당: 후보 없음" and resp.meta.trace[-1].detail == step["detail"]
+    # SSE 로 보내는 JSON 에는 debug 키 자체가 없다
+    job = main._start_job(lambda on_progress: (on_progress(TraceStep(**step)), resp)[1])
+    import time as _time
+    for _ in range(50):
+        if main._jobs[job.job_id].done:
+            break
+        _time.sleep(0.02)
+    events = main._jobs[job.job_id].history
+    progress = [_json.loads(d) for ev, d in events if ev == "progress"]
+    assert progress and "debug" not in progress[0] and progress[0]["detail"] == step["detail"]
+    result = _json.loads(next(d for ev, d in events if ev == "result"))
+    assert result["meta"]["trace"][-1]["debug"] == "Day 1 저녁 식당: 후보 없음"
+    assert CourseResponse.model_validate(result).meta.trace[-1].debug
+
+
+# ---------- F5: 볼거리 보충 장소의 설명 (설명이 있으면 설명만, 없을 때만 대체 문구) ----------
+
+
+def test_f5_attraction_reason_uses_description_alone():
+    doc = {"doc_id": "tour:1", "doc_type": "place", "title": "산장관광지", "one_line": "산장관광지는 자연 체험과 가족 단위 여행에 적합한 관광지입니다."}
+    assert nodes._attraction_reason(doc) == "산장관광지는 자연 체험과 가족 단위 여행에 적합한 관광지입니다."
+    assert nodes._attraction_reason({**doc, "one_line": ""}) == "이 지역에서 들러 볼 만한 곳"  # 설명 없음 → 대체 문구
+    # 지도 볼거리 검색(_find_attractions)의 one_line 은 설명이 아니라 업종 이름 → 대체 문구에 업종을 붙이는 기존 표기 유지
+    kakao = {"doc_type": "place", "title": "가평향토사료관", "kakao_place_id": "k1", "one_line": "박물관"}
+    assert nodes._attraction_reason(kakao) == "이 지역에서 들러 볼 만한 곳 (박물관)"
+    assert nodes._attraction_reason({**kakao, "one_line": ""}) == "이 지역에서 들러 볼 만한 곳"
+    assert "들러 볼 만한 곳 (" not in nodes._attraction_reason(doc)  # 대체 문구와 설명이 괄호로 겹치지 않는다

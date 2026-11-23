@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue
 import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,7 +42,45 @@ from odiro.config import settings
 log = logging.getLogger("odiro.api")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-app = FastAPI(title="Odiro API", version=__version__)
+# ---------- 시작 예열 (콜드스타트) ----------
+# 첫 요청에서 그래프 모듈 import 와 벡터 DB(HNSW 색인 약 600MB) 첫 로딩이 겹쳐 retrieve 가 크게 늦어진다.
+# Cloud Run 은 요청이 없을 때 CPU 를 거의 주지 않으므로, 예열은 서버가 포트를 열기 전(시작 단계, CPU 할당됨)에 한다.
+# 최대 WARMUP_WAIT_SEC 까지만 기다리고, 넘거나 실패해도 서버는 그대로 뜬다 (못 끝낸 예열은 백그라운드에서 이어감).
+# 외부 유료 API(OpenAI·Tavily·카카오)는 부르지 않는다. ODIRO_WARMUP=1 일 때만 (Dockerfile 에서 켬. 로컬·테스트는 꺼짐)
+WARMUP_ENV = "ODIRO_WARMUP"
+WARMUP_WAIT_SEC = 90
+warmup_state: dict[str, Any] = {"status": "off", "ms": 0, "error": ""}
+
+
+def _warmup() -> None:
+    """그래프 모듈 import + 벡터 DB 열기·색인 로딩 + 이용 정보 표 읽기. 실패해도 예외를 밖으로 내지 않는다."""
+    t0 = time.time()
+    warmup_state.update(status="running", ms=0, error="")
+    try:
+        import odiro.agent.run  # noqa: F401  (LangGraph·LangChain·chromadb import)
+        from odiro.tools import rag_search, tour_intro
+
+        info = rag_search.warm()
+        tour_intro._table()
+        warmup_state.update(status="done", ms=int((time.time() - t0) * 1000))
+        log.info("예열 완료 %.1fs %s", time.time() - t0, info)
+    except Exception as e:  # noqa: BLE001  예열 실패는 첫 요청이 평소처럼 초기화하면 된다
+        warmup_state.update(status="error", ms=int((time.time() - t0) * 1000), error=f"{type(e).__name__}: {str(e)[:120]}")
+        log.warning("예열 실패 (요청 처리에는 영향 없음): %s", e)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    if os.environ.get(WARMUP_ENV) == "1":
+        th = threading.Thread(target=_warmup, name="warmup", daemon=True)
+        th.start()
+        await asyncio.to_thread(th.join, WARMUP_WAIT_SEC)  # 시작 단계에서 기다린다 (너무 길면 포기하고 서버를 연다)
+        if th.is_alive():
+            log.warning("예열이 %ss 안에 끝나지 않아 서버를 먼저 엽니다", WARMUP_WAIT_SEC)
+    yield
+
+
+app = FastAPI(title="Odiro API", version=__version__, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -58,7 +98,8 @@ SYNC_TIMEOUT_SEC = 90
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "version": __version__}
+    # warmup: off(로컬) / running / done / error — 배포 뒤 콜드스타트 예열이 끝났는지 확인용 (기존 필드는 그대로)
+    return {"status": "ok", "version": __version__, "warmup": warmup_state["status"]}
 
 
 @app.get("/api/config-check")
@@ -151,7 +192,7 @@ def _start_job(target, *args) -> JobStarted:
         job.events.put((event, data))
 
     def on_progress(step: TraceStep) -> None:
-        emit("progress", step.model_dump_json())
+        emit("progress", step.model_dump_json(exclude={"debug"}))  # 내부 판단 기록은 진행 이벤트로 보내지 않는다
 
     def worker() -> None:
         try:

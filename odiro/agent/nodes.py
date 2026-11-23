@@ -452,6 +452,20 @@ def _is_kakao_attraction(h: dict[str, Any]) -> bool:
     return full.startswith(_KAKAO_ATTRACTION_PREFIX)
 
 
+ATTRACTION_FALLBACK_REASON = "이 지역에서 들러 볼 만한 곳"
+
+
+def _attraction_reason(d: dict[str, Any]) -> str:
+    """볼거리 보충 장소의 추천 이유 (F5). 큐레이션 문서(doc_id 있음)의 한 줄 설명이 있으면 설명만 쓰고, 없을 때만 대체 문구.
+    지도 볼거리 검색(_find_attractions) 결과의 one_line 은 설명이 아니라 업종 이름(예: 박물관)이라 대체 문구 뒤 괄호로 붙인다."""
+    line = (d.get("one_line") or "").strip()
+    if not line:
+        return ATTRACTION_FALLBACK_REASON
+    if d.get("doc_id"):
+        return line
+    return f"{ATTRACTION_FALLBACK_REASON} ({line})"
+
+
 def _find_attractions(req: dict[str, Any], hub: tuple[float, float], rain: bool) -> list[dict[str, Any]]:
     """hub 주변의 실존 볼거리 (카카오 관광명소 AT4 · 문화시설 CT1). 비 예보면 실내 시설 검색어를 먼저 쓴다.
 
@@ -1361,7 +1375,7 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
             d = min(pool, key=lambda x: haversine_m(hub[0], hub[1], float(x["lat"]), float(x["lng"])))
             old = cands[victim]
             cands[victim] = {
-                "name": d["title"], "category": "관광지", "reason": f"이 지역에서 들러 볼 만한 곳 ({d['one_line']})" if d.get("one_line") else "이 지역에서 들러 볼 만한 곳", "stay_min": 90,
+                "name": d["title"], "category": "관광지", "reason": _attraction_reason(d), "stay_min": 90,
                 "indoor": not _is_outdoor({"category": "관광지", "name": d["title"]}), "tags": [], "source": "rag", "est_cost": 0,
                 "day": day, "order": old["order"], "verified": True, "lat": float(d["lat"]), "lng": float(d["lng"]),
                 "address": d.get("addr") or "", "kakao_place_id": d.get("kakao_place_id", ""), "place_url": d.get("place_url", ""),
@@ -1402,7 +1416,7 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
                     same.remove(victim)
                     cands[victim] = {
                         "name": d["title"], "category": "관광지",
-                        "reason": f"이 지역에서 들러 볼 만한 곳 ({d['one_line']})" if d.get("one_line") else "이 지역에서 들러 볼 만한 곳",
+                        "reason": _attraction_reason(d),
                         "stay_min": 90, "indoor": True, "tags": [], "source": "rag", "est_cost": 0, "day": day, "order": cands[victim]["order"],
                         "verified": True, "lat": float(d["lat"]), "lng": float(d["lng"]), "address": d.get("addr") or "",
                         "kakao_place_id": d.get("kakao_place_id", ""), "place_url": d.get("place_url", ""), "image": d.get("image") or "",
@@ -2149,12 +2163,13 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
                 if leg["estimated"] and leg["transport"] != "transit":
                     warnings.append(f"Day {day} {i + 1}→{i + 2} 구간은 길찾기 실패로 직선거리 추정")
     total_min = sum(leg["duration_min"] for leg in legs)
-    detail = f"{len(places)}곳 {len(legs)}구간, 이동 총 {total_min}분" + (f" / {'; '.join(notes)}" if notes else "")
+    detail = f"{len(places)}곳 {len(legs)}구간, 이동 총 {total_min}분"  # 사용자 화면용 요약
+    debug = "; ".join(notes)  # 날마다 식사 순서·점심·저녁 판단 기록 (meta.trace 에만, 화면·진행 이벤트에는 안 보인다)
     return {
         "places": places,
         "legs": legs,
         "warnings": warnings,
-        "trace": state["trace"] + [{"node": "optimize_route", "status": "done", "ms": _now_ms() - t0, "detail": detail}],
+        "trace": state["trace"] + [{"node": "optimize_route", "status": "done", "ms": _now_ms() - t0, "detail": detail, "debug": debug}],
     }
 
 

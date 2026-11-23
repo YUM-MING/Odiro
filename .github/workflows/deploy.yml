@@ -64,7 +64,7 @@ jobs:
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "$SERVICE" --source . --region "$REGION" --project "$PROJECT" \
-            --min-instances 0 --max-instances 1 --memory 4Gi --cpu 1 --timeout 120 \
+            --min-instances 0 --max-instances 1 --memory 4Gi --cpu 1 --timeout 120 --cpu-boost \
             --allow-unauthenticated --quiet
 
   frontend:

@@ -33,7 +33,7 @@ from odiro.api.schemas import (
     WeatherOut,
 )
 from odiro.tools._util import cache, cache_key
-from odiro.tools.tour_intro import find_intro
+from odiro.tools.tour_intro import find_image, find_intro, https_image
 
 log = logging.getLogger("odiro.agent")
 Progress = Callable[[TraceStep], None]
@@ -57,6 +57,11 @@ def edit_graph():
     return _edit_graph
 
 
+def _image_for(p: dict[str, Any]) -> str:
+    """대표 이미지 1장 (TourAPI). 큐레이션 문서에서 온 장소는 그 값, 아니면 이름 + 300m 로 TourAPI 장소를 찾아서. https 로 못 쓰면 빈 문자열."""
+    return https_image(p.get("image")) or find_image(p["name"], p["lat"], p["lng"]) or ""
+
+
 def _intro_for(p: dict[str, Any]) -> IntroOut | None:
     found = find_intro(p["name"], p["lat"], p["lng"])
     return IntroOut(**found) if found else None
@@ -69,7 +74,7 @@ def _to_response(state: dict[str, Any], req: CourseRequest, elapsed_ms: int, cac
             lat=p["lat"], lng=p["lng"], address=p.get("address", ""), kakao_place_id=p.get("kakao_place_id", ""),
             place_url=p.get("place_url", ""), phone=p.get("phone", ""), reason=p.get("reason", ""),
             tags=p.get("tags") or [], review_summary=p.get("review_summary", ""), arrive=p.get("arrive", ""),
-            stay_min=int(p.get("stay_min", 60)), image=p.get("image", ""), verified=True, source=p.get("source", ""),
+            stay_min=int(p.get("stay_min", 60)), image=_image_for(p), verified=True, source=p.get("source", ""),
             est_cost=int(p.get("est_cost") or 0), parking=p.get("parking", ""),
             intro=_intro_for(p),
         )
@@ -112,7 +117,8 @@ def _stream(g, state: dict[str, Any], sequence: tuple[str, ...], on_progress: Pr
             merged.update(delta)
             if on_progress:
                 steps = [t for t in delta.get("trace", []) if t.get("node") == node]
-                on_progress(TraceStep(**steps[-1]) if steps else TraceStep(node=node, status="done"))
+                # 진행 이벤트에는 사용자용 요약(detail)만. 내부 판단 기록(debug)은 최종 meta.trace 에만 남긴다
+                on_progress(TraceStep(**{**steps[-1], "debug": ""}) if steps else TraceStep(node=node, status="done"))
                 # 다음 노드 start 알림 (수정 그래프의 분기 포함)
                 nxt = None
                 if node == "modify":
