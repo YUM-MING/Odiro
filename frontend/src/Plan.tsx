@@ -148,11 +148,18 @@ export default function Plan() {
     scroller.scrollTo({ top: Math.max(0, centered), behavior: 'smooth' })
   }, [selected])
 
-  // 새 코스가 들어오면(생성·수정·저장본 복원) 첫날로 돌아가 1번 장소의 정보 창을 띄운다.
+  // 수정(바꾸기·자유 문장) 뒤에 유지할 날. 카드의 바꾸기는 그 장소의 날, 자유 문장은 보던 날. 생성·복원이면 null
+  const keepDayRef = useRef<number | null>(null)
+
+  // 새 코스가 들어오면(생성·저장본 복원) 첫날로 돌아가 1번 장소의 정보 창을 띄운다.
   // 핀을 눌러야 정보가 나온다는 걸 처음 보는 사용자가 알 수 있게 하기 위해서다.
+  // 수정 결과면 수정한 날(그 날이 새 코스에 없으면 첫날)을 유지한다 — 장소 목록 탭·지도 탭 모두 activeDay 를 따른다.
   useEffect(() => {
     if (!course || !course.places.length) return
-    const first = course.places.reduce((a, p, i) => (p.day < course.places[a].day ? i : a), 0)
+    const keep = keepDayRef.current
+    keepDayRef.current = null
+    const kept = keep === null ? -1 : course.places.findIndex((p) => p.day === keep)
+    const first = kept >= 0 ? kept : course.places.reduce((a, p, i) => (p.day < course.places[a].day ? i : a), 0)
     setActiveDay(course.places[first].day)
     setSelected(first)
   }, [course])
@@ -279,6 +286,7 @@ export default function Plan() {
       // 채팅으로 바꾼 시작 시각은 새 코스에 이어가지 않는다 (이전에 저장된 조건에 남은 값도 제거)
       const { day_starts: _drop, ...r } = req0
       void _drop
+      keepDayRef.current = null // 새 코스는 첫날부터
       setChat([])
       void run('generate', GENERATE_NODES, () => startCourse(r, refresh), () => createCourse(r, refresh), () => mockCourse(r))
     },
@@ -288,6 +296,8 @@ export default function Plan() {
   const edit = useCallback(
     (instruction: string, targetOrder: number | null = null, targetDay = 1) => {
       if (!course) return
+      // 결과가 오면 이 날을 다시 보여 준다: 카드의 바꾸기는 그 장소의 날, 자유 문장·빠른 수정은 지금 보던 날
+      keepDayRef.current = targetOrder !== null ? targetDay : activeDay
       const body: EditRequest = { course, instruction, target_order: targetOrder, target_day: targetDay }
       void run(
         'edit',
@@ -298,7 +308,7 @@ export default function Plan() {
         instruction,
       )
     },
-    [course, run],
+    [course, run, activeDay],
   )
 
   // 첫 진입: 저장된 코스가 없으면 생성 (StrictMode 이중 실행 방지)

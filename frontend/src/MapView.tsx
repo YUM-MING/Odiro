@@ -149,6 +149,9 @@ export default function MapView({
   const hasPins = places.some((p) => p.verified && p.day === activeDay)
 
   const sel = selected !== null && places[selected]?.day === activeDay ? places[selected] : null
+  // 정보 창 대표 이미지 (TourAPI). https 만, 불러오지 못한 주소는 영역째 숨긴다
+  const [brokenImg, setBrokenImg] = useState<string | null>(null)
+  const selImg = sel?.image && sel.image.startsWith('https://') && sel.image !== brokenImg ? sel.image : ''
 
   return (
     <div className="map-wrap">
@@ -200,6 +203,9 @@ export default function MapView({
               {/* 도착·체류 시간, 추천 이유, 비용, 태그는 채팅의 장소 카드에서 본다. 여기는 장소 자체의 세부 정보 */}
             </div>
           </div>
+          {selImg && (
+            <img className="popup-img" src={selImg} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBrokenImg(selImg)} />
+          )}
           {sel.address && <div className="small">{sel.address}</div>}
           {sel.intro && (
             <dl className="popup-intro">
@@ -211,7 +217,7 @@ export default function MapView({
               )}
             </dl>
           )}
-          {sel.intro && <div className="popup-credit">출처 : ⓒ한국관광공사</div>}
+          {(sel.intro || selImg) && <div className="popup-credit">출처 : ⓒ한국관광공사</div>}
           {showParking && (
             <div className="popup-parking">
               <span aria-hidden="true">🅿</span> {sel.parking ? `근처 주차장 ${sel.parking}` : '근처 주차장 정보가 없어요'}
