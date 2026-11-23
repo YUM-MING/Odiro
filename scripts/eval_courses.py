@@ -357,7 +357,19 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
         "mislabels": len(mislabels),
         "mislabel_places": mislabels,
         "elapsed_s": round(resp.meta.elapsed_ms / 1000, 1),
+        "trace": trace_of(resp),  # 노드별 판단 근거 (표·비교·요약에는 쓰지 않는다)
     }
+
+
+TRACE_DETAIL_MAX = 1000  # detail 한 줄 최대 글자 수 (원본 응답·좌표는 저장하지 않는다)
+
+
+def trace_of(resp: CourseResponse) -> list[dict[str, Any]]:
+    """meta.trace 를 노드·상태·시간·detail 텍스트만 남겨 저장용으로. 없으면 빈 목록."""
+    return [
+        {"node": t.node, "status": t.status, "ms": t.ms, "detail": (t.detail or "")[:TRACE_DETAIL_MAX]}
+        for t in (resp.meta.trace or [])
+    ]
 
 
 def comp_text(comp: dict[str, dict[str, int]]) -> str:

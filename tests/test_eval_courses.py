@@ -333,3 +333,25 @@ def test_meal_metrics_do_not_change_composition_or_failure():
     m = ev.evaluate(_resp_times(places, start="10:00", end="20:00"), CENTER, 1500)
     assert m["comp_ok"] and m["days_lacking"] == [] and m["unverified"] == 0
     assert m["meal_days"]["1"]["no_dinner"] is True  # 점검 지표에만 잡힌다
+
+# ---------- trace 저장 (판단 근거 재구성용. 표·비교·요약 출력은 그대로) ----------
+
+
+def test_trace_is_saved_as_short_steps_and_old_results_still_work(tmp_path):
+    from odiro.api.schemas import TraceStep
+
+    places = [_p(1, "a", "관광지"), _p(2, "b", "식당"), _p(3, "c", "카페")]
+    r = _resp(places)
+    r.meta.trace = [TraceStep(node="verify_places", status="done", ms=1200, detail="3/3 확인"),
+                    TraceStep(node="optimize_route", status="done", ms=300, detail="3곳 2구간 / Day 1 저녁 식당: 후보 없음")]
+    m = ev.evaluate(r, CENTER, 1500)
+    assert m["trace"] == [{"node": "verify_places", "status": "done", "ms": 1200, "detail": "3/3 확인"},
+                          {"node": "optimize_route", "status": "done", "ms": 300, "detail": "3곳 2구간 / Day 1 저녁 식당: 후보 없음"}]
+    assert ev.render_table({"x": m}) == ev.render_table({"x": {k: v for k, v in m.items() if k != "trace"}})  # 표는 그대로
+    # trace 가 없는 옛 결과와 섞어도 요약·비교가 된다
+    old = {k: v for k, v in m.items() if k != "trace"}
+    (tmp_path / "old.json").write_text(json.dumps({"date": "2026-11-26", "results": {"seongsu_walk": old}}), encoding="utf-8")
+    (tmp_path / "new.json").write_text(json.dumps({"date": "2026-11-26", "results": {"seongsu_walk": m}}), encoding="utf-8")
+    assert "| seongsu_walk |" in ev.summarize(ev.expand_paths([str(tmp_path / "*.json")]))
+    assert "seongsu_walk" in ev.render_compare({"seongsu_walk": old}, {"seongsu_walk": m})
+    assert ev.trace_of(_resp(places)) == []  # trace 가 빈 응답
