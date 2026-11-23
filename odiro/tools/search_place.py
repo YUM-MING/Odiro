@@ -153,6 +153,27 @@ def name_similarity(a: str, b: str) -> float:
     return dice * (0.5 + 0.5 * ratio2)
 
 
+# 같은 가게 판정 기준. 앱의 중복 제거(agent/nodes.py)와 평가 스크립트(scripts/eval_courses.py)가 이 함수 하나를 같이 쓴다
+SAME_NAME_RADIUS_M = 150  # 정규화한 이름이 완전히 같으면 이 거리 안까지 같은 가게
+SIMILAR_NAME_MIN = 0.85  # 이름 유사도가 이 이상이면
+SIMILAR_NAME_RADIUS_M = 50  # 이 거리 안에서만 같은 가게 (같은 브랜드의 다른 지점과 구분)
+
+
+def same_place(name_a: str, lat_a: float, lng_a: float, name_b: str, lat_b: float, lng_b: float) -> tuple[bool, int]:
+    """두 장소가 같은 가게인지와 직선거리(m).
+
+    같은 가게 = (정규화 이름 일치 & 거리 ≤ 150m) 또는 (이름 유사도 ≥ 0.85 & 거리 ≤ 50m). 좌표만으로는 판정하지 않는다.
+    (둘 다 숙소인 쌍을 빼는 것은 호출하는 쪽에서 한다: 여행은 날마다 같은 숙소를 넣는 것이 의도)
+    """
+    dist = haversine_m(lat_a, lng_a, lat_b, lng_b)
+    a, b = _norm_name(name_a or ""), _norm_name(name_b or "")
+    if not a or not b:
+        return False, dist
+    if a == b and dist <= SAME_NAME_RADIUS_M:
+        return True, dist
+    return name_similarity(a, b) >= SIMILAR_NAME_MIN and dist <= SIMILAR_NAME_RADIUS_M, dist
+
+
 def verify(
     name: str,
     center_lat: float,

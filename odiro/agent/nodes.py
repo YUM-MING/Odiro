@@ -430,6 +430,28 @@ def _near_center(docs: list[dict[str, Any]], center: dict[str, Any], radius_m: i
     ]
 
 
+_KAKAO_ATTRACTION_PREFIX = "여행 > 관광,명소"  # 카카오 카테고리(category_full = API 의 category_name)
+# 업종이 관광명소여도 코스에 넣기 부적절한 세부 분류 (확인된 사례만: '전주종합관광안내소' = 여행 > 관광,명소 > 관광안내소,
+# 카지노 = 여행 > 관광,명소 > 카지노 — 성인 전용이라 데이트·가족 코스에 맞지 않음)
+_NOT_A_VISIT_SPOTS = {"관광안내소", "카지노"}
+
+
+def _is_kakao_attraction(h: dict[str, Any]) -> bool:
+    """카카오 검색 결과가 볼거리 후보인지.
+
+    관광명소(AT4)·문화시설(CT1) 그룹은 지금처럼 허용. 카카오는 문화유적·산봉우리 등에 그룹 코드를 붙이지 않으므로,
+    그룹이 비어 있으면 카테고리가 '여행 > 관광,명소' 로 시작할 때 허용한다. 식당(FD6)·카페(CE7)·숙소 등 다른 그룹이 있으면 그것이 우선(제외).
+    관광안내소처럼 방문 장소가 아닌 세부 분류는 그룹과 관계없이 제외.
+    """
+    group = h.get("category_group") or ""
+    full = h.get("category_full") or ""
+    if _NOT_A_VISIT_SPOTS & set(full.split(" > ")):
+        return False
+    if group:
+        return group in ("AT4", "CT1")
+    return full.startswith(_KAKAO_ATTRACTION_PREFIX)
+
+
 def _find_attractions(req: dict[str, Any], hub: tuple[float, float], rain: bool) -> list[dict[str, Any]]:
     """hub 주변의 실존 볼거리 (카카오 관광명소 AT4 · 문화시설 CT1). 비 예보면 실내 시설 검색어를 먼저 쓴다.
 
@@ -443,7 +465,7 @@ def _find_attractions(req: dict[str, Any], hub: tuple[float, float], rain: bool)
     try:
         for w in words:
             for h in search_place.search(f"{req['region']} {w}", hub[0], hub[1], radius, size=10):
-                if h.get("category_group") in ("AT4", "CT1") and h.get("kakao_place_id") not in seen:
+                if _is_kakao_attraction(h) and h.get("kakao_place_id") not in seen:
                     seen.add(h.get("kakao_place_id"))
                     out.append({
                         "doc_type": "place", "title": h["name"], "lat": h["lat"], "lng": h["lng"], "addr": h.get("address", ""),
@@ -957,6 +979,44 @@ def draft_course(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_BAKERY_WORDS = ("제과", "베이커리", "디저트")
+# TourAPI 콘텐츠 종류 중 볼거리 빈 자리에 쓰면 안 되는 것 (벡터 DB 메타데이터에 한글 명칭으로 저장됨: '음식점', '숙박').
+# 음식점에는 카페도 들어 있어 '관광지'로 끼워 넣으면 분류 오류·같은 가게 중복이 생긴다 (가평 '카페 드 모파상')
+_NOT_ATTRACTION_TYPES = {"음식점", "숙박"}
+
+
+def _attraction_docs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """볼거리 자리를 채울 수 있는 큐레이션 장소 문서 (좌표 있음, 음식점·숙박 제외. content_type 이 없는 문서는 허용)."""
+    return [
+        d for d in docs
+        if d.get("doc_type") == "place" and d.get("lat") and d.get("lng") and d.get("content_type") not in _NOT_ATTRACTION_TYPES
+    ]
+
+
+def _usable_attractions(
+    docs: list[dict[str, Any]], in_use: set[str], taken: Any, hub: tuple[float, float], walk: bool, no_outdoor: bool = False
+) -> list[dict[str, Any]]:
+    """볼거리 후보 문서 중 지금 쓸 수 있는 것: 아직 코스에 없고(이름·같은 가게), 뚜벅이면 그날 동선 중심에서 도보 거리 안, no_outdoor 면 실내만."""
+    return [
+        d for d in docs
+        if d.get("title") not in in_use
+        and not taken({"name": d["title"], "lat": float(d["lat"]), "lng": float(d["lng"]), "kakao_place_id": d.get("kakao_place_id", "")})
+        and not (walk and haversine_m(hub[0], hub[1], float(d["lat"]), float(d["lng"])) > WALK_OUTLIER_M)
+        and not (no_outdoor and _is_outdoor({"category": "관광지", "name": d["title"]}))
+    ]
+
+
+def _kakao_food_role(hit: dict[str, Any]) -> str | None:
+    """카카오 업종이 음식점(FD6)이면 '식당', 카페(CE7)이면 '카페'. 제과·베이커리·디저트(FD6)는 코스에서 카페 역할이라 '카페'.
+    관광지·문화시설·업종 없음은 None (LLM 분류를 그대로 쓴다)."""
+    group = hit.get("category_group", "")
+    if group == "CE7":
+        return "카페"
+    if group == "FD6":
+        return "카페" if any(w in (hit.get("category_full") or "") for w in _BAKERY_WORDS) else "식당"
+    return None
+
+
 def _verify_one(c: dict[str, Any], center: dict[str, Any] | None, radius: int, hint: str) -> dict[str, Any]:
     if c.get("verified") and c.get("lat") and c.get("lng"):
         return c  # 수정 흐름에서 이미 검증된 장소
@@ -995,6 +1055,11 @@ def _verify_one(c: dict[str, Any], center: dict[str, Any] | None, radius: int, h
             return {**c, "verified": False}
     if cat in ("기타", "") and hit.get("category"):
         cat = hit["category"]
+    # 식당·카페는 카카오 업종을 따른다 (LLM 이 카페를 '식당'·'놀거리'로, 식당을 '관광지'로 붙이는 일이 있다).
+    # 이름이 완전히 같아 위 불일치 검사를 건너뛴 경우에도 적용된다. 숙소는 여행 날짜 구성의 기준이라 그대로 둔다
+    kakao_role = _kakao_food_role(hit)
+    if kakao_role and cat != "숙소":
+        cat = kakao_role
     return {
         **c,
         "verified": True,
@@ -1008,6 +1073,32 @@ def _verify_one(c: dict[str, Any], center: dict[str, Any] | None, radius: int, h
         "phone": hit.get("phone", ""),
         "kakao_category": hit.get("category_full", ""),
     }
+
+
+def _same_shop(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """두 장소가 같은 가게인지 (카카오 ID 같음, 또는 search_place.same_place 기준). 둘 다 숙소면 False (날마다 같은 숙소는 의도)."""
+    if a.get("category") == "숙소" and b.get("category") == "숙소":
+        return False
+    if a.get("kakao_place_id") and a.get("kakao_place_id") == b.get("kakao_place_id"):
+        return True
+    if not (a.get("lat") and a.get("lng") and b.get("lat") and b.get("lng")):
+        return bool(a.get("name")) and a.get("name") == b.get("name")
+    return search_place.same_place(a["name"], a["lat"], a["lng"], b["name"], b["lat"], b["lng"])[0]
+
+
+# 같은 가게를 하나로 합칠 때 '장소 정보'로 보는 필드 (카카오 ID 가 있는 쪽을 쓴다). 나머지(날짜·순서·체류·이유 등)는 일정 쪽
+_PLACE_INFO_KEYS = ("name", "lat", "lng", "address", "kakao_place_id", "place_url", "phone", "kakao_category", "category")
+
+
+def _merge_same_shop(a: dict[str, Any], b: dict[str, Any], must: bool) -> dict[str, Any]:
+    """같은 가게 두 항목을 하나로. 자리(날짜·순서·체류)는 먼저 배정된 쪽, 장소 정보는 카카오 ID 가 있는 쪽(둘 다 있으면 먼저 배정된 쪽).
+    must: 둘 중 하나라도 꼭 넣을 곳이면 남는 쪽에 그 표시를 이어 준다."""
+    first, second = sorted((a, b), key=lambda p: (p.get("day", 1), p.get("order", 0)))
+    info = first if first.get("kakao_place_id") or not second.get("kakao_place_id") else second
+    merged = {**first, **{k: info[k] for k in _PLACE_INFO_KEYS if k in info}}
+    if must:
+        merged["must"] = True
+    return merged
 
 
 def _same_role(a: str, b: str) -> bool:
@@ -1049,11 +1140,17 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
         """자유 조건으로 꼭 넣어 달라고 한 종류(예: 반지공방, 라구파스타)에 해당하는 장소인지."""
         if not must:
             return False
+        if c.get("must"):  # 같은 가게를 합칠 때 꼭 넣을 곳 표시를 이어받은 장소
+            return True
         text = search_place._norm_name(c["name"] + (c.get("kakao_category") or c.get("category_full") or ""))
         return (c.get("kakao_place_id") or "-") in must_ids or any(k and k in text for k in must_kws)
 
     def must_done() -> bool:
         return any(c["verified"] and satisfies(c) for c in cands)
+
+    def taken(cand: dict[str, Any]) -> bool:
+        """채울 후보가 이미 코스에 있는 가게인지 (카카오 ID·이름·같은 가게 기준)."""
+        return any(x["verified"] and (x.get("name") == cand.get("name") or _same_shop(x, cand)) for x in cands)
 
     def drop_unwanted() -> None:
         """(1) 프랜차이즈 식당·카페 (2) 꼭 넣을 곳의 두 번째 이후 → 미확인 처리해 다른 곳으로 다시 채운다."""
@@ -1102,22 +1199,33 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
             cands[i] = {**cands[i], "verified": False, "too_far": True, "too_far_orig": dict(cands[i])}
 
     def drop_duplicates() -> None:
-        """같은 장소가 두 번 들어가면(이름만 다르게 적힌 경우 포함) 뒤쪽을 미확인 처리해 다시 채우게 한다."""
+        """같은 장소가 두 번 들어가면(이름만 다르게 적힌 경우 포함) 뒤쪽을 미확인 처리해 다시 채우게 한다.
+
+        같은 가게 기준은 _same_shop (카카오 ID 또는 search_place.same_place). 앞 자리에는 두 항목을 합친 것을 남긴다
+        (장소 정보는 카카오 ID 가 있는 쪽, 꼭 넣을 곳 표시는 이어받음).
+        """
         key = lambda c: c.get("kakao_place_id") or c["name"]
         if slot:  # 수정 흐름: 새로 넣는 자리만 검사 (나머지는 건드리지 않는다)
             i = slot["index"]
-            if cands[i]["verified"] and any(j != i and c["verified"] and key(c) == key(cands[i]) for j, c in enumerate(cands)):
+            if cands[i]["verified"] and any(j != i and c["verified"] and (key(c) == key(cands[i]) or _same_shop(c, cands[i])) for j, c in enumerate(cands)):
                 rejected.append(cands[i]["name"])
                 cands[i] = {**cands[i], "verified": False}
             return
-        seen_ids: set[str] = set()
         for i, c in enumerate(cands):
             if not c["verified"]:
                 continue
-            if key(c) in seen_ids:
-                rejected.append(c["name"])
-                cands[i] = {**c, "verified": False}
-            seen_ids.add(key(c))
+            j = next(
+                (j for j in range(i) if cands[j]["verified"] and (
+                    (key(cands[j]) == key(c) and not (c.get("category") == "숙소" and cands[j].get("category") == "숙소" and cands[j]["day"] != c["day"]))
+                    or _same_shop(cands[j], c)
+                )),
+                None,
+            )
+            if j is None:
+                continue
+            cands[j] = {**_merge_same_shop(cands[j], c, satisfies(cands[j]) or satisfies(c)), "verified": True}
+            rejected.append(c["name"])
+            cands[i] = {**c, "verified": False}
 
     def fill_from_spares() -> None:
         nonlocal spares_used
@@ -1130,7 +1238,9 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
                 if s["day"] == c["day"] and s.get("kakao_place_id") not in in_use and not (must_done() and satisfies(s)) and not (walk and (d := nearest_m(i, s)) is not None and d > WALK_OUTLIER_M)
             ]
             pick = next((s for s in ok if _same_role(s["category"], c["category"])), None)
-            if pick is None and not slot:  # 수정 흐름에서는 역할이 다른 장소로 대신하지 않는다 (식당 자리가 관광지로 바뀌는 일 방지)
+            # 수정 흐름, 그리고 식당·카페 자리는 역할이 다른 장소로 대신하지 않는다 (카페 자리가 놀거리로 바뀌어 카페 0곳이 되는 일 방지).
+            # 비워 두면 아래 '확인된 후보로 채움' 이 카카오 주변 식당·카페(같은 업종)로 채운다
+            if pick is None and not slot and c.get("category") not in ("식당", "카페"):
                 pick = next(iter(ok), None)
             if pick:
                 spare_pool.remove(pick)
@@ -1193,22 +1303,23 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
             if hub is None:
                 continue
             if c.get("category") in ("식당", "카페"):
-                group = "FD6" if c["category"] == "식당" else "CE7"
                 pool = [
                     {"name": h["name"], "lat": h["lat"], "lng": h["lng"], "address": h.get("address", ""), "kakao_place_id": h.get("kakao_place_id", ""),
                      "place_url": h.get("place_url", ""), "phone": h.get("phone", ""), "kakao_category": h.get("category_full", "")}
                     for h in state.get("poi_docs", [])
-                    if h.get("category_group") == group and h.get("kakao_place_id") not in in_use
+                    # 역할은 카카오 업종으로 (제과·베이커리·디저트 음식점은 카페 자리 후보)
+                    if _kakao_food_role(h) == c["category"] and h.get("kakao_place_id") not in in_use
                     and (allow_chain or not _is_chain(h["name"])) and not (must_done() and satisfies(h))
                 ]
             else:
                 pool = [
                     {"name": d["title"], "lat": float(d["lat"]), "lng": float(d["lng"]), "address": d.get("addr") or "", "kakao_place_id": "",
                      "reason": d.get("one_line") or c.get("reason", ""), "image": d.get("image") or ""}
-                    for d in state.get("rag_docs", [])
-                    if d.get("doc_type") == "place" and d.get("lat") and d.get("lng") and d.get("title") not in in_use
+                    for d in _attraction_docs(state.get("rag_docs", []))
+                    if d.get("title") not in in_use
                     and not (rain and _is_outdoor({"category": "관광지", "name": d["title"]}))
                 ]
+            pool = [h for h in pool if not taken(h)]  # 띄어쓰기·지점명만 다른 같은 가게도 이미 쓴 것으로 본다
             if walk:
                 pool = [h for h in pool if haversine_m(hub[0], hub[1], h["lat"], h["lng"]) <= WALK_OUTLIER_M]
             if not pool:
@@ -1234,12 +1345,11 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
                 continue
             in_use = {x["name"] for x in cands if x["verified"]}
             hub = _centroid([cands[i] for i in idxs])
-            known = [d for d in state.get("rag_docs", []) if d.get("doc_type") == "place" and d.get("lat") and d.get("lng")]
-            pool = [
-                d for d in (known or _find_attractions(req, hub, rain))
-                if d.get("title") not in in_use
-                and not (walk and haversine_m(hub[0], hub[1], float(d["lat"]), float(d["lng"])) > WALK_OUTLIER_M)
-            ]
+            # 쓸 수 있는(가깝고 아직 안 쓴) 큐레이션 볼거리가 없으면 지도 볼거리 검색으로 넘어간다
+            # (큐레이션 문서가 있어도 전부 멀면 예전에는 검색을 건너뛰어 볼거리 0곳으로 남았다)
+            pool = _usable_attractions(_attraction_docs(state.get("rag_docs", [])), in_use, taken, hub, walk) or _usable_attractions(
+                _find_attractions(req, hub, rain), in_use, taken, hub, walk
+            )
             indoor = [d for d in pool if not _is_outdoor({"category": "관광지", "name": d["title"]})]
             pool = (indoor or pool) if rain else pool  # 비 예보면 실내 우선, 없으면 야외라도 한 곳은 넣는다
             if not pool:
@@ -1265,20 +1375,22 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
                 continue
             hub = _centroid([cands[i] for i in day_idx])
             pool: list[dict[str, Any]] | None = None
+            searched = False  # 이 날 지도 볼거리 검색을 했는지 (한 번만)
             for role in ("식당", "카페"):
                 same = [i for i in day_idx if cands[i].get("category") == role]
                 movable = [i for i in same if not satisfies(cands[i])]  # 사용자가 꼭 넣어 달라고 한 곳은 건드리지 않는다
                 while len(same) > 2 and movable:
                     if pool is None:
-                        known = [d for d in state.get("rag_docs", []) if d.get("doc_type") == "place" and d.get("lat") and d.get("lng")]
-                        pool = list(known or _find_attractions(req, hub, rain))
+                        pool = _attraction_docs(state.get("rag_docs", []))
+                        searched = not pool
+                        if searched:
+                            pool = list(_find_attractions(req, hub, rain))
                     in_use = {x["name"] for x in cands if x["verified"]}
-                    ok = [
-                        d for d in pool
-                        if d.get("title") not in in_use
-                        and not (walk and haversine_m(hub[0], hub[1], float(d["lat"]), float(d["lng"])) > WALK_OUTLIER_M)
-                        and not (rain and _is_outdoor({"category": "관광지", "name": d["title"]}))
-                    ]
+                    ok = _usable_attractions(pool, in_use, taken, hub, walk, no_outdoor=rain)
+                    if not ok and not searched:  # 큐레이션 볼거리가 전부 멀거나 이미 쓰였으면 지도 볼거리 검색으로 한 번 더
+                        searched = True
+                        pool = pool + list(_find_attractions(req, hub, rain))
+                        ok = _usable_attractions(pool, in_use, taken, hub, walk, no_outdoor=rain)
                     if not ok:
                         break
                     d = min(ok, key=lambda x: haversine_m(hub[0], hub[1], float(x["lat"]), float(x["lng"])))
@@ -1305,6 +1417,53 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
         if not c["verified"] and c.get("too_far_orig") and not (slot and slot["index"] == i):
             cands[i] = c["too_far_orig"]  # 대신할 곳을 못 찾았으면 지우지 않고 원래 장소를 두되 알린다
             warnings.append(f"'{cands[i]['name']}' 은(는) 다른 장소들과 조금 떨어져 있어요 (도보 20분 이상)")
+
+    # 하루 카페·식당 최소 1곳: 장소 3곳 이상인 날에 카페(식당)가 0곳이면, 남는 자리 하나를 이미 받아 둔 카카오 주변 카페(식당)로 바꾼다.
+    # 바꿀 자리: 볼거리가 2곳 이상이면 볼거리 → (카페가 없을 때) 식당이 2곳 이상이고 종료 18:00 이하면 식당 / (식당이 없을 때) 카페가 2곳 이상이면 카페.
+    # 꼭 넣을 곳·숙소는 바꾸지 않고, 새 검색·LLM 호출 없이 poi_docs 만 쓴다. 못 바꾸면 그대로 두고 경고 한 줄.
+    role_fixed = 0
+    if not slot:
+        end_by_18 = _hhmm_to_min(req.get("end_time", "20:00")) <= 18 * 60
+        day_prefix = (lambda d: f"Day {d} ") if _trip_days(req) > 1 else (lambda d: "")
+        for day in sorted({c["day"] for c in cands if c["verified"]}):
+            for need in ("카페", "식당"):
+                idx = [i for i, c in enumerate(cands) if c["verified"] and c["day"] == day and c.get("category") != "숙소"]
+                if len(idx) < 3 or any(cands[i].get("category") == need for i in idx):
+                    continue
+                plays = [i for i in idx if cands[i].get("category") in PLAY_CATEGORIES]
+                eats = [i for i in idx if cands[i].get("category") == "식당"]
+                cafes = [i for i in idx if cands[i].get("category") == "카페"]
+                # 꼭 넣을 곳은 바꾸지 않는다 (숙소는 idx 에서 이미 빠짐)
+                free_plays, free_eats, free_cafes = ([i for i in g if not satisfies(cands[i])] for g in (plays, eats, cafes))
+                victim = None
+                if len(plays) >= 2 and free_plays:
+                    victim = free_plays[-1]
+                elif need == "카페" and end_by_18 and len(eats) >= 2 and free_eats:
+                    victim = free_eats[-1]
+                elif need == "식당" and len(cafes) >= 2 and free_cafes:
+                    victim = free_cafes[-1]
+                hub = _centroid([cands[i] for i in idx])
+                pool = [
+                    h for h in state.get("poi_docs", [])
+                    if _kakao_food_role(h) == need and (allow_chain or not _is_chain(h["name"]))  # 제과점은 카페 후보
+                    and not taken(h) and not (must_done() and satisfies(h))
+                    and not (walk and haversine_m(hub[0], hub[1], h["lat"], h["lng"]) > WALK_OUTLIER_M)
+                ]
+                if victim is None or not pool:
+                    obj = "를" if need == "카페" else "을"
+                    warnings.append(f"{day_prefix(day)}{need}{obj} 넣을 자리나 근처 {need} 후보를 찾지 못해 {need} 없이 구성했어요")
+                    continue
+                h = min(pool, key=lambda x: haversine_m(hub[0], hub[1], x["lat"], x["lng"]))
+                old = cands[victim]
+                cands[victim] = {
+                    "name": h["name"], "category": need, "reason": f"{req['region']} 동선에서 가까운 {need}", "stay_min": 60, "indoor": True,
+                    "tags": [], "source": "rag", "est_cost": 0, "day": day, "order": old["order"], "verified": True,
+                    "lat": h["lat"], "lng": h["lng"], "address": h.get("address", ""), "kakao_place_id": h.get("kakao_place_id", ""),
+                    "place_url": h.get("place_url", ""), "phone": h.get("phone", ""), "kakao_category": h.get("category_full", ""),
+                    **({"fixed_order": True} if old.get("fixed_order") else {}),
+                }
+                rejected.append(old["name"])
+                role_fixed += 1
 
     # 수정 흐름: 교체 장소를 끝내 확인하지 못했거나(또는 이미 코스에 있는 곳이면) 자리를 비우지 않고 원래 장소를 유지한다.
     # 안내 문구는 처음 고른 후보가 아니라 실제로 들어간 장소 기준으로 다시 쓴다.
@@ -1391,19 +1550,21 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
     if budget and est_total > budget:
         warnings.append(f"1인 예상 비용이 약 {est_total:,}원으로 예산 {budget:,}원을 넘어요 (추정치, 숙박비 제외)")
 
-    # 미검증 제거 + 같은 장소 중복 제거
-    seen: set[str] = set()
+    # 미검증 제거 + 같은 장소 중복 제거 (안전망: 앞 단계에서 못 잡은 같은 가게를 합친다. 여기서는 더 채울 경로가 없어 장소 수가 준다)
     verified: list[dict[str, Any]] = []
     for c in cands:
         if not c["verified"]:
             continue
         key = c.get("kakao_place_id") or c["name"]
         if c.get("category") == "숙소":
-            key = f"{key}@day{c['day']}"
-        if key in seen:
+            # 숙소는 같은 날 같은 숙소만 중복 (날마다 같은 숙소는 의도)
+            dup = next((k for k, v in enumerate(verified) if v.get("category") == "숙소" and v["day"] == c["day"] and (v.get("kakao_place_id") or v["name"]) == key), None)
+        else:
+            dup = next((k for k, v in enumerate(verified) if _same_shop(v, c) or (v.get("kakao_place_id") or v["name"]) == key), None)
+        if dup is None:
+            verified.append(c)
             continue
-        seen.add(key)
-        verified.append(c)
+        verified[dup] = _merge_same_shop(verified[dup], c, satisfies(verified[dup]) or satisfies(c))
     dropped = len(cands) - len(verified)
     if dropped:
         warnings.append(f"지도에서 확인되지 않았거나 중복된 장소 {dropped}곳을 제외했어요")
@@ -1416,6 +1577,8 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
         detail += f", 볼거리 {play_added}곳 추가"
     if meals_fixed:
         detail += ", 식당·카페 수와 순서 조정"
+    if role_fixed:
+        detail += f", 카페·식당 없는 날 {role_fixed}곳 보충"
     if regrouped:
         detail += ", 가까운 곳끼리 날짜 재배정"
     if must_added:
@@ -1844,10 +2007,11 @@ def modify(state: dict[str, Any]) -> dict[str, Any]:
         radius = WALK_OUTLIER_M if state["request"].get("transport") == "walk" else 8000
         allow = _chains_allowed(state["request"])
         if role in ("식당", "카페"):
-            group, word = ("FD6", "맛집") if role == "식당" else ("CE7", "카페")
+            word = "맛집" if role == "식당" else "카페"
             hits = [
                 h for h in search_place.search(f"{state['request']['region']} {word}", near["lat"], near["lng"], radius, size=15)
-                if h.get("category_group") == group and h.get("kakao_place_id") not in taken and (allow or not _is_chain(h["name"]))
+                # 역할은 카카오 업종으로 (제과·베이커리·디저트 음식점은 카페로 본다)
+                if _kakao_food_role(h) == role and h.get("kakao_place_id") not in taken and (allow or not _is_chain(h["name"]))
             ]
         else:
             docs = _find_attractions(state["request"], (near["lat"], near["lng"]), bool(wx.get("rain")))

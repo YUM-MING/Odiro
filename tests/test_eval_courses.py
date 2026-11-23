@@ -201,3 +201,39 @@ def test_summarize_groups_runs_by_scenario(tmp_path):
     assert cells[9] == "1"  # 중복의심은 값이 있는 2회만 더한다
     assert next(line for line in table.splitlines() if line.startswith("| busan_walk |")).split("|")[3].strip() == "1"  # 실패 1
     assert "출발일 2026-11-26" in table
+
+
+
+# ---------- 품질 점검용 구성 지표: 볼거리 0곳인 날 · 식당 또는 카페 3곳 이상인 날 (구성 미흡 판정과 별개) ----------
+
+
+def test_quality_days_from_places_and_not_in_comp_ok():
+    # busan_walk 수정 후 형태: 카페 3 · 식당 2 · 볼거리 0 → 구성 미흡은 아니지만 두 지표에 잡힌다
+    places = [_p(1, "블랙업커피", "카페"), _p(2, "해운대집밥", "식당"), _p(3, "모또", "카페"), _p(4, "스턴커피", "카페"), _p(5, "수림횟집", "식당")]
+    m = ev.evaluate(_resp(places), CENTER, 1500)
+    assert m["comp_ok"] and m["no_play_days"] == ["1"] and m["crowded_days"] == ["1"]
+    row = ev.render_table({"busan": m}).splitlines()[2]
+    assert "| 1 | 1 |" in row and "⚠구성 미흡" not in row
+
+
+def test_quality_days_from_old_results_comp_or_titles_or_na():
+    from_comp = {"comp": {"1": {"식당": 2, "카페": 2, "볼거리": 1}, "2": {"식당": 3, "카페": 2, "볼거리": 0}}}  # jeonju 수정 후 D2
+    assert ev.quality_days(from_comp) == {"no_play_days": ["2"], "crowded_days": ["2"]}
+    from_titles = {"titles": ["D1-1 블랙업커피[카페]", "D1-2 해운대집밥[식당]", "D1-3 모또[카페]", "D1-4 스턴커피[카페]", "D1-5 라한호텔[숙소]"]}
+    assert ev.quality_days(from_titles) == {"no_play_days": ["1"], "crowded_days": ["1"]}  # 숙소는 세지 않는다
+    assert ev.quality_days({"titles": ["알 수 없는 형식"]}) is None  # 추정하지 않음
+    assert ev.quality_days({}) is None
+    assert ev._q_count({}, "no_play_days") == "N/A"
+
+
+def test_summarize_shows_quality_day_columns(tmp_path):
+    now = datetime(2026, 11, 26, 10, 0, 0)
+    busy = ev.evaluate(_resp([_p(1, "a", "카페"), _p(2, "b", "식당"), _p(3, "c", "카페"), _p(4, "d", "카페")]), CENTER, 1500)
+    ev.save_results(tmp_path, ["busan_walk"], "2026-11-26", {"busan_walk": busy}, "", now=now)
+    (tmp_path / "old.json").write_text(json.dumps({"date": "2026-11-26", "results": {"busan_walk": {"places": 3, "unverified": 0, "outside": 0, "comp_ok": True,
+        "over_budget": False, "warnings": 0, "elapsed_s": 1.0, "comp": {"1": {"식당": 1, "카페": 1, "볼거리": 1}}}}}), encoding="utf-8")
+    table = ev.summarize(ev.expand_paths([str(tmp_path / "*.json")]))
+    head = next(line for line in table.splitlines() if line.startswith("| 시나리오"))
+    assert "볼거리 0곳인 날" in head and "식당·카페 3곳+ 날" in head
+    cells = [c.strip() for c in next(line for line in table.splitlines() if line.startswith("| busan_walk |")).split("|")[1:-1]]
+    assert cells[11] == "1" and cells[12] == "1"  # 2회 중 한 번만 해당

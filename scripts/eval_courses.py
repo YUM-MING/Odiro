@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import re
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -38,7 +39,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from odiro.api.schemas import CourseRequest, CourseResponse
 from odiro.config import settings
 from odiro.tools._util import haversine_m
-from odiro.tools.search_place import _norm_name, name_similarity
+from odiro.tools.search_place import (  # noqa: F401  같은 가게 판정 기준은 앱과 공유 (임계값을 이 파일에 두지 않는다)
+    SAME_NAME_RADIUS_M,
+    SIMILAR_NAME_MIN,
+    SIMILAR_NAME_RADIUS_M,
+    same_place,
+)
 
 EAT, CAFE, STAY = "식당", "카페", "숙소"
 
@@ -134,26 +140,7 @@ def overtime(places: list[Any], end_time: str) -> dict[int, int]:
     return {d: e - limit for d, e in sorted(ends.items()) if e > limit}
 
 
-# ---------- 같은 가게 판정 (묶음 1 Q3 에서 앱의 중복 제거도 이 기준을 그대로 쓴다) ----------
-
-SAME_NAME_RADIUS_M = 150  # 정규화한 이름이 완전히 같으면 이 거리 안까지 같은 가게
-SIMILAR_NAME_MIN = 0.85  # 이름 유사도가 이 이상이면
-SIMILAR_NAME_RADIUS_M = 50  # 이 거리 안에서만 같은 가게 (같은 브랜드의 다른 지점과 구분)
-
-
-def same_place(name_a: str, lat_a: float, lng_a: float, name_b: str, lat_b: float, lng_b: float) -> tuple[bool, int]:
-    """두 장소가 같은 가게인지와 직선거리(m).
-
-    같은 가게 = (정규화 이름 일치 & 거리 ≤ 150m) 또는 (이름 유사도 ≥ 0.85 & 거리 ≤ 50m). 좌표만으로는 판정하지 않는다.
-    정규화·유사도·거리는 앱 함수를 그대로 쓴다: search_place._norm_name, search_place.name_similarity, _util.haversine_m
-    """
-    dist = haversine_m(lat_a, lng_a, lat_b, lng_b)
-    a, b = _norm_name(name_a or ""), _norm_name(name_b or "")
-    if not a or not b:
-        return False, dist
-    if a == b and dist <= SAME_NAME_RADIUS_M:
-        return True, dist
-    return name_similarity(a, b) >= SIMILAR_NAME_MIN and dist <= SIMILAR_NAME_RADIUS_M, dist
+# ---------- 같은 가게 판정: 앱과 같은 함수(odiro.tools.search_place.same_place)를 쓴다 ----------
 
 
 def duplicate_pairs(places: list[Any]) -> list[dict[str, Any]]:
@@ -190,6 +177,47 @@ def mislabeled(places: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
+# ---------- 품질 점검용 구성 지표 (실패·구성 미흡 판정에는 넣지 않는다: 맛집·카페 투어처럼 의도일 수 있다) ----------
+
+_TITLE_RE = re.compile(r"^D(\d+)-\d+ .*\[([^\]]+)\]$")  # 결과 JSON 의 titles 항목: "D1-3 모또[카페]"
+
+
+def day_counts(m: dict[str, Any]) -> dict[str, dict[str, int]] | None:
+    """날짜별 {'식당','카페','볼거리'} 수. 저장된 comp 를 먼저 쓰고, 없으면 titles(이름[카테고리])로 센다. 둘 다 없으면 None (추정하지 않음)."""
+    if m.get("comp"):
+        return m["comp"]
+    titles = m.get("titles")
+    if not titles:
+        return None
+    days: dict[str, dict[str, int]] = {}
+    for t in titles:
+        hit = _TITLE_RE.match(t)
+        if not hit:
+            return None  # 형식이 다르면 추정하지 않는다
+        day, cat = hit.group(1), hit.group(2)
+        if cat == STAY:
+            continue
+        c = days.setdefault(day, {EAT: 0, CAFE: 0, "볼거리": 0})
+        c[cat if cat in (EAT, CAFE) else "볼거리"] += 1
+    return days
+
+
+def quality_days(m: dict[str, Any]) -> dict[str, list[str]] | None:
+    """볼거리 0곳인 날 / 식당 또는 카페가 3곳 이상인 날 (날짜 목록). 계산할 수 없으면 None."""
+    days = day_counts(m)
+    if days is None:
+        return None
+    return {
+        "no_play_days": [d for d, c in sorted(days.items()) if c.get("볼거리", 0) == 0],
+        "crowded_days": [d for d, c in sorted(days.items()) if c.get(EAT, 0) >= 3 or c.get(CAFE, 0) >= 3],
+    }
+
+
+def _q_count(m: dict[str, Any], key: str) -> str:
+    q = quality_days(m)
+    return "N/A" if q is None else str(len(q[key]))
+
+
 def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int) -> dict[str, Any]:
     places = resp.places
     unverified = [p.name for p in places if is_unverified(p)]
@@ -201,6 +229,7 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
         ]
     comp = composition(places)
     lacking = [d for d, c in comp.items() if c[EAT] == 0 or c[CAFE] == 0]
+    q = quality_days({"comp": {str(d): c for d, c in comp.items()}}) or {"no_play_days": [], "crowded_days": []}
     budget_total = resp.request.budget
     over = overtime(places, resp.request.end_time)
     dups = duplicate_pairs(places)
@@ -215,6 +244,8 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
         "comp": {str(d): c for d, c in sorted(comp.items())},
         "comp_ok": bool(comp) and not lacking,
         "days_lacking": lacking,
+        "no_play_days": q["no_play_days"],  # 품질 점검용 (구성 미흡 판정에는 안 넣음)
+        "crowded_days": q["crowded_days"],
         "overtime": {str(d): m for d, m in over.items()},
         "overtime_max_min": max(over.values(), default=0),
         "est_cost": resp.meta.est_cost_total,
@@ -242,13 +273,13 @@ def _sum_known(ms: list[dict[str, Any]], key: str) -> str:
 
 def render_table(results: dict[str, dict[str, Any]]) -> str:
     head = (
-        "| 시나리오 | 장소 | 미확인 | 반경밖 | 구성(식당·카페·볼거리) | 예산 | 종료초과 | 중복의심 | 분류의심 | 날씨 | 경고 | 시간(초) |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "| 시나리오 | 장소 | 미확인 | 반경밖 | 구성(식당·카페·볼거리) | 예산 | 종료초과 | 중복의심 | 분류의심 | 볼거리0일 | 식·카3+일 | 날씨 | 경고 | 시간(초) |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
     rows = []
     for key, m in results.items():
         if m.get("error"):
-            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | | | | {m.get('elapsed_s', '')} |")
+            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | | | | | | {m.get('elapsed_s', '')} |")
             continue
         comp = comp_text(m["comp"]) + ("" if m["comp_ok"] else " ⚠구성 미흡")
         out = f"{m['outside']}/{m['places']} ({m['outside_ratio']:.0%})"
@@ -256,7 +287,8 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
         late = "ok" if not m.get("overtime_max_min") else ", ".join(f"D{d} +{v}분" for d, v in m["overtime"].items())
         rows.append(
             f"| {key} | {m['places']} | {m['unverified']} | {out} | {comp} | {budget} | {late} | "
-            f"{m.get('dup_suspects', '-')} | {m.get('mislabels', '-')} | {m['weather']} | {m['warnings']} | {m['elapsed_s']} |"
+            f"{m.get('dup_suspects', '-')} | {m.get('mislabels', '-')} | {_q_count(m, 'no_play_days')} | {_q_count(m, 'crowded_days')} | "
+            f"{m['weather']} | {m['warnings']} | {m['elapsed_s']} |"
         )
     ok = [m for m in results.values() if not m.get("error")]
     if ok:
@@ -267,10 +299,16 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
             f"| **합계/평균** ({len(ok)}/{len(results)} 성공) | {n_places} | **{sum(m['unverified'] for m in ok)}** | "
             f"{n_out}/{n_places} ({(n_out / n_places if n_places else 0):.0%}) | 구성 미흡 {sum(not m['comp_ok'] for m in ok)}건 | "
             f"초과 {sum(m['over_budget'] for m in ok)}건 | {sum(bool(m.get('overtime_max_min')) for m in ok)}건 | "
-            f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | | {sum(m['warnings'] for m in ok)} | "
-            f"평균 {sum(times) / len(times):.1f} · 최대 {times[-1]} |"
+            f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | {_sum_q(ok, 'no_play_days')} | {_sum_q(ok, 'crowded_days')} | "
+            f"| {sum(m['warnings'] for m in ok)} | 평균 {sum(times) / len(times):.1f} · 최대 {times[-1]} |"
         )
     return head + "\n".join(rows)
+
+
+def _sum_q(ms: list[dict[str, Any]], key: str) -> str:
+    """품질 점검 지표의 날 수 합계. 계산할 수 있는 실행만 더하고, 하나도 없으면 'N/A'."""
+    qs = [q for q in (quality_days(m) for m in ms) if q is not None]
+    return str(sum(len(q[key]) for q in qs)) if qs else "N/A"
 
 
 def render_compare(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]]) -> str:
@@ -325,14 +363,17 @@ def summarize(files: list[Path]) -> str:
         f"## 결과 요약 ({len(files)}개 파일, 출발일 {', '.join(sorted(dates))})"
         + ("\n\n⚠ 출발일이 서로 다른 파일이 섞여 있다 — 날씨가 달라 비교가 부정확할 수 있다" if len(dates) > 1 else ""),
         "",
-        "| 시나리오 | 실행 | 실패 | 미확인 합 | 반경밖 | 구성 미흡 | 카페 0곳인 날 | 예산 초과 | 종료초과 | 중복의심 합 | 분류의심 합 | 경고 합 | 시간 평균·최대(초) |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        (
+            "| 시나리오 | 실행 | 실패 | 미확인 합 | 반경밖 | 구성 미흡 | 카페 0곳인 날 | 예산 초과 | 종료초과 | 중복의심 합 | 분류의심 합 "
+            "| 볼거리 0곳인 날 | 식당·카페 3곳+ 날 | 경고 합 | 시간 평균·최대(초) |"
+        ),
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for key in sorted(runs):
         ms = runs[key]
         ok = [m for m in ms if not m.get("error")]
         if not ok:
-            lines.append(f"| {key} | {len(ms)} | {len(ms)} | | | | | | | | | | |")
+            lines.append(f"| {key} | {len(ms)} | {len(ms)} | | | | | | | | | | | | |")
             continue
         n_places = sum(m["places"] for m in ok)
         no_cafe = sum(1 for m in ok for c in m["comp"].values() if c.get(CAFE, 0) == 0)
@@ -341,8 +382,8 @@ def summarize(files: list[Path]) -> str:
             f"| {key} | {len(ms)} | {len(ms) - len(ok)} | {sum(m['unverified'] for m in ok)} | "
             f"{sum(m['outside'] for m in ok)}/{n_places} | {sum(not m['comp_ok'] for m in ok)}/{len(ok)}회 | {no_cafe} | "
             f"{sum(m['over_budget'] for m in ok)}/{len(ok)}회 | {sum(bool(m.get('overtime_max_min')) for m in ok)}/{len(ok)}회 | "
-            f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | {sum(m['warnings'] for m in ok)} | "
-            f"{sum(times) / len(times):.1f} · {max(times)} |"
+            f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | {_sum_q(ok, 'no_play_days')} | {_sum_q(ok, 'crowded_days')} | "
+            f"{sum(m['warnings'] for m in ok)} | {sum(times) / len(times):.1f} · {max(times)} |"
         )
     return "\n".join(lines)
 

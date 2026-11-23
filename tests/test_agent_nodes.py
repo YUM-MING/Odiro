@@ -356,7 +356,8 @@ def test_must_have_restaurant_replaces_a_restaurant_slot(fake_verify):
 def test_too_many_restaurants_in_a_day_are_rebalanced(fake_verify, monkeypatch):
     found = [{"doc_type": "place", "title": "올림픽뮤지엄", "lat": 37.5449, "lng": 127.0562, "addr": "", "kakao_place_id": "k1", "place_url": "", "one_line": "박물관"}]
     monkeypatch.setattr(nodes, "_find_attractions", lambda req, hub, rain: found)
-    cands = [_p("카페1", "카페"), _p("박물관A"), _p("빵집", "식당"), _p("칼국수", "식당"), _p("국수", "식당")]
+    # (11/23) '국수' → '돈까스': 좌표가 같은 '칼국수'·'국수' 는 같은 가게 기준(유사도 0.85 + 50m)에 걸리므로 서로 다른 식당 이름으로
+    cands = [_p("카페1", "카페"), _p("박물관A"), _p("빵집", "식당"), _p("칼국수", "식당"), _p("돈까스", "식당")]
     out = nodes.verify_places(_state(cands, request={"transport": "car"}))
     cats = [p["category"] for p in out["verified"]]
     assert cats.count("식당") == 2 and "올림픽뮤지엄" in [p["name"] for p in out["verified"]]
@@ -518,3 +519,388 @@ def test_blog_backed_cafes_drops_invented_names_and_non_cafes_and_taken(monkeypa
     hits = {"없는카페": [_cafe("없는카페", 0.001, "9")], "천상가옥": [{**_cafe("천상가옥", 0.001, "1"), "category_group": "FD6"}], "프랙티커피": [_cafe("프랙티커피", 0.001, "2")]}
     center, docs = _blog_cafe_setup(monkeypatch, items, hits)
     assert nodes._blog_backed_cafes({"region": "성수동", "transport": "walk"}, center, docs, ["감성/조용한"], 1500, {"2"}) == []  # 제목에 없는 상호·식당·이미 있는 곳은 모두 제외
+
+
+# ---------- 묶음 1 (11/23): 장소 종류·중복·카페 ----------
+
+CENTER = {"lat": 37.70, "lng": 127.40, "label": "경기 가평군"}
+
+
+def _hit(name, group, full, lat=37.7001, lng=127.4001, pid="k1"):
+    return {"name": name, "category_group": group, "category_full": full, "category": {"FD6": "식당", "CE7": "카페", "AT4": "관광지"}.get(group, ""),
+            "lat": lat, "lng": lng, "address": "", "kakao_place_id": pid, "place_url": "", "phone": ""}
+
+
+def _verify_with(monkeypatch, cand_name, cand_cat, hit):
+    monkeypatch.setattr(nodes.search_place, "verify", lambda *a, **k: hit)
+    return nodes._verify_one({"name": cand_name, "category": cand_cat, "day": 1, "order": 1, "verified": False}, CENTER, 30000, "가평")
+
+
+# Q1. 카테고리를 카카오 업종과 맞춘다 (FD6 → 식당, CE7 → 카페, 제과·베이커리·디저트 → 카페. 그 외는 LLM 값)
+
+
+def test_q1_kakao_cafe_labeled_play_becomes_cafe(monkeypatch):
+    out = _verify_with(monkeypatch, "키즈카페 놀자", "놀거리", _hit("키즈카페 놀자", "CE7", "음식점 > 카페 > 테마카페 > 키즈카페"))
+    assert out["verified"] and out["category"] == "카페"
+
+
+def test_q1_exact_name_restaurant_labeled_attraction_becomes_restaurant(monkeypatch):
+    # 이름이 완전히 같으면 업종 불일치 거절을 건너뛰는 경로 (봉녀수제비가 '관광지'로 남던 경로)
+    out = _verify_with(monkeypatch, "봉녀수제비", "관광지", _hit("봉녀수제비", "FD6", "음식점 > 한식 > 국수"))
+    assert out["verified"] and out["category"] == "식당"
+
+
+def test_q1_bakery_is_a_cafe(monkeypatch):
+    # 기준선 gapyeong_preset: "자잠157 베이커리카페" 가 '식당'으로 표시됨
+    out = _verify_with(monkeypatch, "자잠157 베이커리카페", "식당", _hit("자잠157 베이커리카페", "FD6", "음식점 > 간식 > 제과,베이커리"))
+    assert out["category"] == "카페"
+
+
+def test_q1_attraction_and_unknown_group_keep_llm_category(monkeypatch):
+    assert _verify_with(monkeypatch, "설미재미술관", "관광지", _hit("설미재미술관", "AT4", "여행 > 관광,명소"))["category"] == "관광지"
+    assert _verify_with(monkeypatch, "가평레일바이크", "놀거리", _hit("가평레일바이크", "", "스포츠,레저 > 레일바이크"))["category"] == "놀거리"
+
+
+def test_q1_lodging_is_not_overridden(monkeypatch):
+    # 여행 숙소는 날짜 구성의 기준이라 건드리지 않는다
+    out = _verify_with(monkeypatch, "가평 펜션카페", "숙소", _hit("가평 펜션카페", "CE7", "음식점 > 카페"))
+    assert out["category"] == "숙소"
+
+
+# Q2. TourAPI 음식점·숙박 문서는 볼거리 빈 자리에 쓰지 않는다 (content_type 은 한글 명칭으로 저장됨)
+
+
+def _doc(title, ctype, lat=37.5447, lng=127.0561, **kw):
+    return {"doc_type": "place", "title": title, "content_type": ctype, "lat": lat, "lng": lng, "addr": "", **kw}
+
+
+def test_q2_restaurant_doc_not_added_as_attraction_on_day_without_one(fake_verify, monkeypatch):
+    # 실험 C-2: 볼거리 없는 날 play_added 가 TourAPI 음식점 '서호식당'을 '관광지'로 넣던 문제 → 지도 볼거리로 대체
+    found = [{"doc_type": "place", "title": "설미재미술관", "lat": 37.5449, "lng": 127.0562, "addr": "", "kakao_place_id": "k9", "place_url": "", "one_line": "미술관"}]
+    monkeypatch.setattr(nodes, "_find_attractions", lambda req, hub, rain: found)
+    cands = [_p("카페1", "카페"), _p("식당1", "식당"), _p("카페2", "카페")]
+    out = nodes.verify_places(_state(cands, rag_docs=[_doc("서호식당", "음식점")], request={"transport": "car"}))
+    names = [p["name"] for p in out["verified"]]
+    assert "서호식당" not in names and "설미재미술관" in names
+
+
+def test_q2_unverified_attraction_slot_skips_restaurant_and_lodging_docs(fake_verify):
+    cands = [_p("A"), _p("B", "식당"), _p("C", "카페"), {"name": "없는전시", "category": "관광지", "day": 1, "order": 4, "verified": False}]
+    rag = [_doc("봉녀수제비", "음식점"), _doc("가평 호텔", "숙박", lat=37.54471), _doc("가평레일파크", "레포츠", lat=37.5450)]
+    out = nodes.verify_places(_state(cands, rag_docs=rag, request={"transport": "car"}))
+    assert [p["name"] for p in out["verified"]] == ["A", "B", "C", "가평레일파크"]
+
+
+def test_q2_normal_attraction_types_are_still_used(fake_verify):
+    for ctype in ("관광지", "문화시설", "레포츠", "행사", "여행코스", "쇼핑"):
+        cands = [_p("A"), _p("B", "식당"), _p("C", "카페"), {"name": "없는곳", "category": "관광지", "day": 1, "order": 4, "verified": False}]
+        out = nodes.verify_places(_state(cands, rag_docs=[_doc(f"정상{ctype}", ctype)], request={"transport": "car"}))
+        assert out["verified"][-1]["name"] == f"정상{ctype}", ctype
+
+
+def test_q2_rebalancing_restaurants_skips_restaurant_docs(fake_verify):
+    # 식당 3곳 → 한 곳을 볼거리로 바꿀 때도 음식점 문서는 쓰지 않는다
+    cands = [_p("카페1", "카페"), _p("박물관A"), _p("빵집", "식당", lat=37.5450), _p("칼국수", "식당", lat=37.5455), _p("돈까스", "식당", lat=37.5460)]
+    rag = [_doc("갈비집", "음식점", lat=37.5451, lng=127.0560), _doc("올림픽뮤지엄", "문화시설", lat=37.5457, lng=127.0560)]  # 음식점 문서가 그날 중심에 더 가깝다
+    out = nodes.verify_places(_state(cands, rag_docs=rag, request={"transport": "car"}))
+    names = [p["name"] for p in out["verified"]]
+    assert "갈비집" not in names and "올림픽뮤지엄" in names
+
+
+# Q3. 같은 가게 판정 (정규화 이름 일치+150m 또는 유사도≥0.85+50m. 좌표만으로는 판정하지 않음. 숙소끼리는 제외)
+
+TOUR = (37.7013794825, 127.3963235444)  # TourAPI 좌표의 '카페 드 모파상'
+KAKAO = (37.70124550237815, 127.3961320593873)  # 카카오 좌표의 '카페드모파상' (약 22m)
+
+
+def test_q3_fill_skips_candidate_that_is_the_same_shop(fake_verify):
+    # 실험 C-1: 확인 실패한 볼거리 자리를 큐레이션 문서로 채울 때, 이미 코스에 있는 가게(띄어쓰기만 다름)는 건너뛴다
+    cands = [{"name": "없는관광지", "category": "관광지", "day": 1, "order": 1, "verified": False},
+             _p("카페드모파상", "카페", order=2, lat=KAKAO[0], lng=KAKAO[1], kakao_place_id="g1"), _p("서호식당", "식당", order=3, lat=37.7020, lng=127.3970)]
+    rag = [_doc("카페 드 모파상", "관광지", lat=TOUR[0], lng=TOUR[1]), _doc("설미재미술관", "문화시설", lat=37.7030, lng=127.3990)]
+    out = nodes.verify_places(_state(cands, rag_docs=rag, request={"transport": "car"}))
+    names = [p["name"] for p in out["verified"]]
+    assert names == ["설미재미술관", "카페드모파상", "서호식당"]
+
+
+def test_q3_duplicate_keeps_kakao_info_in_the_earlier_slot(fake_verify):
+    cands = [_p("카페 드 모파상", "관광지", order=1, lat=TOUR[0], lng=TOUR[1], kakao_place_id="", stay_min=90),
+             _p("서호식당", "식당", order=2, lat=37.7020, lng=127.3970), _p("카페드모파상", "카페", order=3, lat=KAKAO[0], lng=KAKAO[1], kakao_place_id="g1")]
+    out = nodes.verify_places(_state(cands, request={"transport": "car"}))
+    kept = [p for p in out["verified"] if "모파상" in p["name"]]
+    assert len(kept) == 1
+    k = kept[0]
+    assert (k["name"], k["kakao_place_id"], k["category"], k["lat"]) == ("카페드모파상", "g1", "카페", KAKAO[0])  # 장소 정보는 카카오 쪽
+    assert (k["order"], k["stay_min"]) == (1, 90)  # 자리·체류는 먼저 배정된 쪽
+    assert any("중복" in w for w in out["warnings"])  # 채울 후보가 없으면 기존 경고
+
+
+def test_q3_must_have_mark_is_inherited_by_the_kept_place(fake_verify):
+    # 꼭 넣을 곳(북카페)에 해당하던 쪽이 지워져도 남는 쪽이 이어받는다 → 꼭 넣을 곳을 또 끼워 넣지 않는다
+    cands = [_p("책방 숲", "카페", order=1, lat=TOUR[0], lng=TOUR[1], kakao_place_id="", kakao_category="음식점 > 카페 > 북카페"),
+             _p("서호식당", "식당", order=2, lat=37.7020, lng=127.3970), _p("책방숲", "카페", order=3, lat=KAKAO[0], lng=KAKAO[1], kakao_place_id="b1"),
+             _p("설미재미술관", order=4, lat=37.7030, lng=127.3990)]
+    must = [{"name": "다른북카페", "lat": 37.7040, "lng": 127.3995, "kakao_place_id": "m9", "keyword": "북카페", "category_group": "CE7"}]
+    out = nodes.verify_places(_state(cands, must_docs=must, must_keywords=["북카페"], request={"transport": "car"}))
+    names = [p["name"] for p in out["verified"]]
+    assert names.count("책방숲") == 1 and "책방 숲" not in names and "다른북카페" not in names
+    assert next(p for p in out["verified"] if p["name"] == "책방숲").get("must") is True
+
+
+def test_q3_different_shops_30m_apart_are_both_kept(fake_verify):
+    cands = [_p("로우키커피", "카페", order=1), _p("하노이별", "식당", order=2, lat=37.54477), _p("서울숲", order=3, lat=37.5450)]
+    out = nodes.verify_places(_state(cands, request={"transport": "car"}))
+    assert [p["name"] for p in out["verified"]] == ["로우키커피", "하노이별", "서울숲"]
+
+
+def test_q3_same_shop_on_different_days_is_kept_once(fake_verify):
+    cands = [_p("카페 드 모파상", "관광지", day=1, order=1, lat=TOUR[0], lng=TOUR[1], kakao_place_id=""),
+             _p("카페드모파상", "카페", day=2, order=1, lat=KAKAO[0], lng=KAKAO[1], kakao_place_id="g1")]
+    out = nodes.verify_places(_state(cands, request={"transport": "car"}))
+    assert [(p["name"], p["day"]) for p in out["verified"]] == [("카페드모파상", 1)]
+
+
+def test_q3_lodging_pairs_and_rule_thresholds():
+    stay = {"name": "가평 펜션", "category": "숙소", "lat": 37.70, "lng": 127.40, "kakao_place_id": "s1"}
+    assert not nodes._same_shop(stay, {**stay, "day": 2})  # 여행의 같은 숙소 반복은 의도
+    a = {"name": "카페 드 모파상", "category": "관광지", "lat": TOUR[0], "lng": TOUR[1], "kakao_place_id": ""}
+    assert nodes._same_shop(a, {"name": "카페드모파상", "category": "카페", "lat": KAKAO[0], "lng": KAKAO[1], "kakao_place_id": "g1"})
+    assert not nodes._same_shop(a, {"name": "다른가게", "category": "카페", "lat": TOUR[0], "lng": TOUR[1], "kakao_place_id": "x"})  # 좌표만 같음
+    from odiro.tools import search_place
+    assert (search_place.SAME_NAME_RADIUS_M, search_place.SIMILAR_NAME_MIN, search_place.SIMILAR_NAME_RADIUS_M) == (150, 0.85, 50)
+
+
+# Q4. 식당·카페 빈 자리는 같은 역할 예비 후보로만 채운다 (없으면 카카오 주변 식당·카페 후보가 채운다)
+
+
+def test_q4_cafe_slot_is_not_filled_with_a_different_role_spare(fake_verify):
+    # 실험 B-1: 초안의 카페(프랜차이즈)가 빠지고 예비 후보는 놀거리뿐 → 예전에는 놀거리로 채워져 카페 0곳
+    cands = [_p("국립인천해양박물관", order=1), _p("송도맛집A", "식당", order=2, lat=37.5446),
+             _p("스타벅스 송도점", "카페", order=3, lat=37.5447), _p("송도맛집B", "식당", order=4, lat=37.5448)]
+    spares = [_p("트리플스트리트", "놀거리", order=0, lat=37.5449)]
+    pois = [{"name": "로컬카페", "lat": 37.5450, "lng": 127.0561, "kakao_place_id": "c1", "category_group": "CE7", "address": ""}]
+    out = nodes.verify_places(_state(cands, spares, poi_docs=pois, request={"transport": "car", "region": "인천 송도"}))
+    got = {p["name"]: p["category"] for p in out["verified"]}
+    assert got.get("로컬카페") == "카페" and "트리플스트리트" not in got
+
+
+def test_q4_attraction_slot_still_accepts_any_role_spare(fake_verify):
+    # 그날 볼거리(D)가 따로 있어 '볼거리 없는 날' 보충(지도 검색)은 돌지 않는다
+    cands = [{"name": "없는전시", "category": "관광지", "day": 1, "order": 1, "verified": False}, _p("B", "식당", order=2), _p("C", "카페", order=3), _p("D", "놀거리", order=4)]
+    out = nodes.verify_places(_state(cands, [_p("예비카페", "카페", order=0, lat=37.5446)], request={"transport": "car"}))
+    assert [p["name"] for p in out["verified"]] == ["예비카페", "B", "C", "D"]  # 볼거리 자리는 지금처럼 다른 역할도 받는다
+
+
+# Q5. 장소 3곳 이상인 날에 카페(식당)가 0곳이면 이미 받아 둔 카카오 주변 후보로 한 자리를 바꾼다 (새 검색·LLM 없음)
+
+CAFE_POI = {"name": "로컬카페", "lat": 37.5450, "lng": 127.0561, "kakao_place_id": "c1", "category_group": "CE7", "address": "", "category_full": "음식점 > 카페"}
+FOOD_POI = {"name": "동네밥집", "lat": 37.5451, "lng": 127.0561, "kakao_place_id": "f1", "category_group": "FD6", "address": "", "category_full": "음식점 > 한식"}
+
+
+def _cats(out, day=1):
+    return [p["category"] for p in out["verified"] if p["day"] == day]
+
+
+def test_q5_day_without_cafe_gets_one_by_replacing_an_extra_attraction(fake_verify):
+    # 실험 B-3: 초안에 카페가 없는 날 (볼거리 2·식당 2) → 볼거리 하나를 주변 카페로
+    cands = [_p("박물관", order=1), _p("맛집A", "식당", order=2, lat=37.5446), _p("트리플스트리트", "놀거리", order=3, lat=37.5447), _p("맛집B", "식당", order=4, lat=37.5448)]
+    out = nodes.verify_places(_state(cands, poi_docs=[CAFE_POI], request={"transport": "car", "end_time": "18:00"}))
+    names = [p["name"] for p in out["verified"]]
+    assert "로컬카페" in names and _cats(out).count("카페") == 1 and _cats(out).count("식당") == 2
+    assert names == ["박물관", "맛집A", "로컬카페", "맛집B"]  # 뒤쪽 볼거리 자리에 (순서 자리 유지)
+
+
+def test_q5_must_have_and_lodging_are_never_replaced(fake_verify):
+    cands = [_p("반지공방 아뜰리에", "놀거리", order=1), _p("맛집A", "식당", order=2, lat=37.5446), _p("카페없는숙소", "숙소", order=3, lat=37.5447),
+             _p("맛집B", "식당", order=4, lat=37.5448), _p("전시관", order=5, lat=37.5449)]
+    must = [{"name": "반지공방 아뜰리에", "lat": 37.5445, "lng": 127.0560, "kakao_place_id": "반지공방 아뜰리에", "keyword": "반지공방", "category_group": ""}]
+    out = nodes.verify_places(_state(cands, poi_docs=[CAFE_POI], must_docs=must, must_keywords=["반지공방"], request={"transport": "car", "end_time": "18:00"}))
+    names = [p["name"] for p in out["verified"]]
+    assert "반지공방 아뜰리에" in names and "카페없는숙소" in names and "로컬카페" in names and "전시관" not in names
+
+
+def test_q5_no_candidate_leaves_course_and_warns(fake_verify):
+    cands = [_p("박물관", order=1), _p("맛집A", "식당", order=2, lat=37.5446), _p("트리플스트리트", "놀거리", order=3, lat=37.5447)]
+    out = nodes.verify_places(_state(cands, request={"transport": "car"}))
+    assert [p["name"] for p in out["verified"]] == ["박물관", "맛집A", "트리플스트리트"]
+    assert any("카페" in w for w in out["warnings"])
+
+
+def test_q5_second_restaurant_kept_when_day_ends_after_18(fake_verify):
+    # 볼거리 1·식당 2·카페 0: 종료 20:00 이면 저녁 식당을 지키고 경고만, 18:00 이면 식당 하나를 카페로
+    cands = [_p("박물관", order=1), _p("맛집A", "식당", order=2, lat=37.5446), _p("맛집B", "식당", order=3, lat=37.5448)]
+    late = nodes.verify_places(_state(list(cands), poi_docs=[CAFE_POI], request={"transport": "car", "end_time": "20:00"}))
+    assert [p["name"] for p in late["verified"]] == ["박물관", "맛집A", "맛집B"] and any("카페" in w for w in late["warnings"])
+    early = nodes.verify_places(_state(list(cands), poi_docs=[CAFE_POI], request={"transport": "car", "end_time": "18:00"}))
+    assert _cats(early).count("카페") == 1 and _cats(early).count("식당") == 1
+
+
+def test_q5_day_without_restaurant_keeps_at_least_one_cafe(fake_verify):
+    cands = [_p("카페1", "카페", order=1), _p("박물관", order=2, lat=37.5446), _p("카페2", "카페", order=3, lat=37.5447)]
+    out = nodes.verify_places(_state(cands, poi_docs=[FOOD_POI], request={"transport": "car"}))
+    assert _cats(out).count("식당") == 1 and _cats(out).count("카페") == 1 and "동네밥집" in [p["name"] for p in out["verified"]]
+
+
+def test_q5_applies_to_each_day_of_a_trip(fake_verify):
+    cands = [_p("A1", day=1, order=1), _p("A2", "놀거리", day=1, order=2, lat=37.5446), _p("A식당", "식당", day=1, order=3, lat=37.5447),
+             _p("B1", day=2, order=1, lat=37.5448), _p("B2", "놀거리", day=2, order=2, lat=37.5449), _p("B식당", "식당", day=2, order=3, lat=37.5450)]
+    pois = [CAFE_POI, {**CAFE_POI, "name": "숲속로스터리", "kakao_place_id": "c2", "lat": 37.5452}]  # 이름이 비슷하면 같은 가게로 본다
+    stays = [{"name": "가평펜션", "lat": 37.5446, "lng": 127.0562, "kakao_place_id": "h1", "address": ""}]
+    out = nodes.verify_places(_state(cands, poi_docs=pois, stay_docs=stays, request={"transport": "car", "mode": "trip", "days": 2}))
+    assert _cats(out, 1).count("카페") == 1 and _cats(out, 2).count("카페") == 1
+
+
+# Q2 보완 (11/23 평가 busan_walk·jeonju_vegan): 가까운 큐레이션 볼거리가 없으면(멀거나 음식점뿐) 지도 볼거리 검색으로 넘어간다
+
+
+def test_q2_walk_day_without_near_curated_attraction_uses_map_search(fake_verify, monkeypatch):
+    # busan_walk 형: 볼거리 없는 날, 큐레이션 문서는 가까운 음식점(제외됨)과 6km 밖 관광지뿐 → 예전엔 지도 검색을 안 해 볼거리 0
+    found = [{"doc_type": "place", "title": "해운대해수욕장", "lat": 37.5447, "lng": 127.0562, "addr": "", "kakao_place_id": "a1", "place_url": "", "one_line": "해수욕장"}]
+    monkeypatch.setattr(nodes, "_find_attractions", lambda req, hub, rain: found)
+    cands = [_p("카페1", "카페", order=1), _p("식당1", "식당", order=2, lat=37.5446), _p("카페2", "카페", order=3, lat=37.5447),
+             _p("카페3", "카페", order=4, lat=37.5448), _p("식당2", "식당", order=5, lat=37.5449)]
+    rag = [_doc("해운대암소갈비집", "음식점", lat=37.5450), _doc("해동용궁사", "관광지", lat=37.60)]
+    out = nodes.verify_places(_state(cands, rag_docs=rag, request={"transport": "walk"}))
+    names = [p["name"] for p in out["verified"]]
+    assert "해운대해수욕장" in names and "해운대암소갈비집" not in names and "해동용궁사" not in names
+
+
+def test_q2_rebalancing_restaurants_falls_back_to_map_search_when_curated_is_far(fake_verify, monkeypatch):
+    # jeonju_vegan D2 형: 식당 3곳 → 하나를 볼거리로 바꿀 때, 가까운 큐레이션 볼거리가 없으면 지도 검색 결과로
+    found = [{"doc_type": "place", "title": "경기전", "lat": 37.5447, "lng": 127.0562, "addr": "", "kakao_place_id": "a2", "place_url": "", "one_line": "사적"},
+             {"doc_type": "place", "title": "전동성당", "lat": 37.5448, "lng": 127.0562, "addr": "", "kakao_place_id": "a3", "place_url": "", "one_line": "성당"}]
+    monkeypatch.setattr(nodes, "_find_attractions", lambda req, hub, rain: found)
+    cands = [_p("식당1", "식당", order=1), _p("카페1", "카페", order=2, lat=37.5446), _p("식당2", "식당", order=3, lat=37.5447),
+             _p("카페2", "카페", order=4, lat=37.5448), _p("식당3", "식당", order=5, lat=37.5449)]
+    rag = [_doc("베테랑칼국수", "음식점", lat=37.5446), _doc("덕진공원", "관광지", lat=37.60)]
+    out = nodes.verify_places(_state(cands, rag_docs=rag, request={"transport": "walk"}))
+    cats = [p["category"] for p in out["verified"]]
+    assert cats.count("식당") <= 2 and sum(c not in ("식당", "카페") for c in cats) >= 1
+    assert "베테랑칼국수" not in [p["name"] for p in out["verified"]]
+
+
+# 빵집은 카페 (결정 2): 카카오 주변 후보로 식당·카페 자리를 채우는 경로도 _kakao_food_role 로 역할을 정한다
+
+BAKERY = {"name": "PNB풍년제과 한옥마을점", "lat": 37.5446, "lng": 127.0561, "kakao_place_id": "p1", "category_group": "FD6", "address": "",
+          "category_full": "음식점 > 간식 > 제과,베이커리"}
+RESTAURANT = {"name": "동네밥집", "lat": 37.5452, "lng": 127.0563, "kakao_place_id": "f2", "category_group": "FD6", "address": "", "category_full": "음식점 > 한식"}
+ROASTERY = {"name": "로컬로스터리", "lat": 37.5452, "lng": 127.0563, "kakao_place_id": "c2", "category_group": "CE7", "address": "", "category_full": "음식점 > 카페"}
+
+
+def _empty(cat, order):
+    return {"name": f"없는{cat}", "category": cat, "day": 1, "order": order, "verified": False}
+
+
+def test_bakery_is_not_used_for_a_restaurant_slot(fake_verify):
+    cands = [_p("A", order=1), _p("카페1", "카페", order=2), _empty("식당", 3)]
+    out = nodes.verify_places(_state(cands, poi_docs=[BAKERY, RESTAURANT], request={"transport": "car"}))
+    assert [(p["name"], p["category"]) for p in out["verified"]][-1] == ("동네밥집", "식당")  # 제과점이 더 가까워도 식당 자리에는 안 들어감
+
+
+def test_bakery_can_fill_a_cafe_slot(fake_verify):
+    cands = [_p("A", order=1), _p("식당1", "식당", order=2), _empty("카페", 3)]
+    out = nodes.verify_places(_state(cands, poi_docs=[BAKERY], request={"transport": "car"}))
+    assert [(p["name"], p["category"]) for p in out["verified"]][-1] == ("PNB풍년제과 한옥마을점", "카페")
+
+
+def test_bakery_chain_is_excluded_from_cafe_slot(fake_verify):
+    chain = {**BAKERY, "name": "파리바게뜨 송도점", "kakao_place_id": "pb", "lat": 37.5445}
+    cands = [_p("A", order=1), _p("식당1", "식당", order=2), _empty("카페", 3)]
+    out = nodes.verify_places(_state(cands, poi_docs=[chain, ROASTERY], request={"transport": "car"}))
+    names = [p["name"] for p in out["verified"]]
+    assert "파리바게뜨 송도점" not in names and names[-1] == "로컬로스터리"
+
+
+def test_regular_restaurant_and_cafe_keep_their_roles_in_fill(fake_verify):
+    cands = [_p("A", order=1), _empty("식당", 2), _empty("카페", 3)]
+    out = nodes.verify_places(_state(cands, poi_docs=[RESTAURANT, ROASTERY], request={"transport": "car"}))
+    assert [(p["name"], p["category"]) for p in out["verified"]] == [("A", "관광지"), ("동네밥집", "식당"), ("로컬로스터리", "카페")]
+
+
+def test_poi_without_kakao_category_keeps_old_behavior(fake_verify):
+    # 업종 상세(category_full)가 없으면 그룹대로(FD6 → 식당 자리), 그룹도 없으면 식당·카페 자리에 쓰지 않는다 (기존과 같음)
+    no_full = {k: v for k, v in RESTAURANT.items() if k != "category_full"}
+    no_group = {**ROASTERY, "name": "그룹없는곳", "kakao_place_id": "g0", "category_group": "", "lat": 37.5446}
+    cands = [_p("A", order=1), _p("카페1", "카페", order=2), _empty("식당", 3)]
+    out = nodes.verify_places(_state(cands, poi_docs=[no_group, no_full], request={"transport": "car"}))
+    assert [p["name"] for p in out["verified"]][-1] == "동네밥집"
+
+
+def test_q5_bakery_counts_as_cafe_candidate_not_restaurant(fake_verify):
+    # 카페 없는 날 → 제과점을 카페로 넣는다 / 식당 없는 날 → 제과점만 있으면 넣지 않고 경고
+    no_cafe = [_p("박물관", order=1), _p("맛집A", "식당", order=2, lat=37.5447), _p("공원", "놀거리", order=3, lat=37.5448)]
+    out = nodes.verify_places(_state(no_cafe, poi_docs=[BAKERY], request={"transport": "car"}))
+    assert ("PNB풍년제과 한옥마을점", "카페") in [(p["name"], p["category"]) for p in out["verified"]]
+    no_food = [_p("박물관", order=1), _p("카페1", "카페", order=2, lat=37.5447), _p("카페2", "카페", order=3, lat=37.5448)]
+    out = nodes.verify_places(_state(no_food, poi_docs=[BAKERY], request={"transport": "car"}))
+    assert "PNB풍년제과 한옥마을점" not in [p["name"] for p in out["verified"]] and any("식당" in w for w in out["warnings"])
+
+
+def test_edit_fallback_does_not_offer_bakery_for_a_restaurant(monkeypatch):
+    plan = nodes.EditPlan(target_number=2, place=nodes.DraftPlace(name="없는식당", category="식당", reason=""), keywords=[])
+    _fake_chat(monkeypatch, plan)
+    monkeypatch.setattr(nodes.search_place, "search", lambda *a, **k: [BAKERY, RESTAURANT])
+    places = [_p("A", verified=True), _p("B", "식당", order=2, verified=True), _p("C", "카페", order=3, verified=True)]
+    out = nodes.modify({"request": {"region": "전주", "days": 1, "mode": "outing", "transport": "car"}, "conditions": "", "places": places,
+                        "instruction": "2번째를 다른 식당으로", "trace": []})
+    names = [s["name"] for s in out["spares"]]
+    assert "동네밥집" in names and "PNB풍년제과 한옥마을점" not in names
+
+
+# 지도 볼거리 검색(_find_attractions): 업종 그룹 코드가 비어 있는 카카오 관광명소도 볼거리로 (전주 한옥마을 재현)
+
+
+def _kakao_hit(name, group, full, lat=37.5447, lng=127.0562, pid=None):
+    return {"name": name, "category_group": group, "category_full": full, "lat": lat, "lng": lng, "address": "", "kakao_place_id": pid or name, "place_url": ""}
+
+
+def _attractions_from(monkeypatch, hits, transport="walk"):
+    monkeypatch.setattr(nodes.search_place, "search", lambda *a, **k: hits)
+    return [d["title"] for d in nodes._find_attractions({"region": "전주 한옥마을", "transport": transport}, (37.5445, 127.0560), False)]
+
+
+def test_attraction_search_keeps_heritage_and_peak_without_group_code(monkeypatch):
+    hits = [_kakao_hit("전주사고", "", "여행 > 관광,명소 > 문화유적 > 유적지"), _kakao_hit("오목대", "", "여행 > 관광,명소 > 산봉우리")]
+    assert _attractions_from(monkeypatch, hits) == ["전주사고", "오목대"]
+
+
+def test_attraction_search_drops_tourist_information_center_even_with_at4(monkeypatch):
+    hits = [_kakao_hit("전주종합관광안내소", "", "여행 > 관광,명소 > 관광안내소"), _kakao_hit("가평관광안내소", "AT4", "여행 > 관광,명소 > 관광안내소"),
+            _kakao_hit("경기전", "", "여행 > 관광,명소 > 문화유적 > 궁,궐")]
+    assert _attractions_from(monkeypatch, hits) == ["경기전"]
+
+
+def test_attraction_search_still_accepts_at4_and_ct1(monkeypatch):
+    hits = [_kakao_hit("전주한옥마을 선비골목길", "AT4", "여행 > 관광,명소 > 테마거리"), _kakao_hit("국립전주박물관", "CT1", "문화,예술 > 문화시설 > 박물관")]
+    assert _attractions_from(monkeypatch, hits) == ["전주한옥마을 선비골목길", "국립전주박물관"]
+
+
+def test_attraction_search_rejects_restaurants_and_cafes_even_with_travel_category(monkeypatch):
+    hits = [_kakao_hit("한옥마을 맛집", "FD6", "여행 > 관광,명소 > 맛집거리"), _kakao_hit("전망카페", "CE7", "여행 > 관광,명소 > 전망대"),
+            _kakao_hit("한옥숙소", "AD5", "여행 > 관광,명소")]
+    assert _attractions_from(monkeypatch, hits) == []
+
+
+def test_attraction_search_rejects_results_without_group_and_category(monkeypatch):
+    hits = [_kakao_hit("알수없는곳", "", ""), {**_kakao_hit("필드없음", "", ""), "category_group": None, "category_full": None}]
+    assert _attractions_from(monkeypatch, hits) == []
+
+
+def test_heritage_from_map_search_respects_distance_and_used_places(fake_verify, monkeypatch):
+    # 지도 검색 결과가 늘어나도 기존 규칙은 그대로: 이미 쓴 장소(같은 가게 포함)와 도보 거리 밖은 빠지고 그다음 후보가 들어간다
+    hits = [_kakao_hit("전주한옥마을 선비골목길", "AT4", "여행 > 관광,명소 > 테마거리"),  # Day 1 에 이미 있음
+            _kakao_hit("먼 산성", "", "여행 > 관광,명소 > 문화유적 > 성", lat=37.60),  # 약 6km (도보 밖)
+            _kakao_hit("전주사고", "", "여행 > 관광,명소 > 문화유적 > 유적지", lat=37.5449)]
+    monkeypatch.setattr(nodes.search_place, "search", lambda *a, **k: hits)
+    cands = [_p("전주한옥마을 선비골목길", day=1, order=1), _p("식당A", "식당", day=1, order=2), _p("카페A", "카페", day=1, order=3),
+             _p("식당B", "식당", day=2, order=1), _p("카페B", "카페", day=2, order=2, lat=37.5446), _p("카페C", "카페", day=2, order=3, lat=37.5447)]
+    out = nodes.verify_places(_state(cands, request={"transport": "walk"}))
+    day2 = [p["name"] for p in out["verified"] if p["day"] == 2]
+    assert "전주사고" in day2 and "먼 산성" not in day2
+    assert [p["name"] for p in out["verified"]].count("전주한옥마을 선비골목길") == 1
+
+
+def test_attraction_search_drops_casino_even_with_at4(monkeypatch):
+    hits = [_kakao_hit("세븐럭카지노", "", "여행 > 관광,명소 > 카지노"), _kakao_hit("강원랜드카지노", "AT4", "여행 > 관광,명소 > 카지노"),
+            _kakao_hit("오목대", "", "여행 > 관광,명소 > 산봉우리")]
+    assert _attractions_from(monkeypatch, hits) == ["오목대"]
