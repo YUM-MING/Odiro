@@ -814,11 +814,14 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
         pois = backed + [p for p in pois if p.get("kakao_place_id") not in {b.get("kakao_place_id") for b in backed}]
     kept: dict[str, int] = {}
     ranked: list[dict[str, Any]] = []
+    cut_eats: list[dict[str, Any]] = []  # 상위 N곳에서 잘린 카카오 식당 → 저녁 식당 보충(M4) 후보로만 쓴다 (LLM 에는 안 넘김)
     for p in pois:
         g = p.get("category_group") or ""
         if kept.get(g, 0) < POI_PER_GROUP:
             kept[g] = kept.get(g, 0) + 1
             ranked.append(p)
+        elif g == "FD6":
+            cut_eats.append(p)
     pois = ranked
     n_backed = sum(1 for p in pois if p.get("blog_mentions"))
 
@@ -844,6 +847,7 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
         "rag_docs": rag_docs,
         "web_docs": web_docs,
         "poi_docs": pois,
+        "dinner_pool": cut_eats[:POI_FETCH],  # 이미 받은 '맛집' 검색 결과(최대 POI_FETCH 건) 중 poi_docs 에 못 든 식당
         "stay_docs": stays,
         "weather": weather,
         "sun_times": sun,
@@ -1586,6 +1590,8 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
     return {
         **extra,
         "verified": verified,
+        # 쓰지 않고 남은 확인된 예비 후보 (기존 spares 필드를 덮어씀). optimize_route 의 저녁 전 빈 시간 보충(C3)만 읽는다
+        "spares": [s for s in spare_pool if not any(_same_shop(v, s) or v.get("name") == s.get("name") for v in verified)],
         "rejected": rejected,
         "retry_count": rounds,
         "warnings": warnings,
@@ -1599,13 +1605,20 @@ def verify_places(state: dict[str, Any]) -> dict[str, Any]:
 MEAL_ORDER_MAX_GROWTH = 1.3
 MEAL_ORDER_MAX_ADDED_M = {"walk": WALK_OUTLIER_M, "car": RAG_RADIUS_M["car_local"]}
 LUNCH_RULE_START_MAX = "10:30"  # 점심 규칙(M3): 그날 출발이 이 시각 이하
-FIRST_MEAL_NOT_BEFORE = "11:00"  # M3: 첫 식당 도착이 이보다 이르면 볼거리·카페 하나를 앞으로
+FIRST_MEAL_NOT_BEFORE = "11:00"  # M3: 첫 식당 도착이 이보다 이르면 뒤의 볼거리·카페를 앞으로
+FIRST_MEAL_MAX_MOVES = 2  # D2: 앞으로 옮기는 볼거리·카페는 최대 이만큼
+FIRST_MEAL_LATEST = "13:30"  # D2: 둘째를 옮겨 첫 식당 어림 도착이 이보다 늦어지면 둘째는 옮기지 않는다
+LUNCH_STRETCH_MAX = 30  # E1: 첫 식당 앞 볼거리·카페 체류를 장소당 이만큼까지 늘려 11:00 에 맞춘다
+DINNER_LATEST = "20:30"  # E1: 점심 전 연장 뒤 저녁 식당 도착이 이보다 늦으면 연장을 되돌린다
+NEW_LEG_MAX_MIN = {"car": 30, "walk": 20}  # E2: M4·C3 로 넣은 장소에 새로 생긴 구간 하나의 최대 이동 시간(실제 구간)
 DINNER_RULE_START_MAX = "15:00"  # 저녁 규칙(M2·M4): 출발 ≤ 15:00 이고
 DINNER_RULE_END_MIN = "19:00"  # 종료 ≥ 19:00 인 날만
 DINNER_AT = "17:30"  # M2·M4: 저녁 식당 도착을 이 시각 이후로 맞춘다
 DINNER_WINDOW = ("17:00", "20:30")  # M4: 이 사이에 도착하는 식당이 없으면 저녁 식당을 덧붙일지 본다
 STAY_STRETCH_MAX = 30  # M2: 저녁 앞 카페·볼거리 체류를 장소당 이만큼까지 늘린다
 FREE_TIME_NOTE_MIN = 10  # 저녁 전 자유 시간이 이 이상일 때만 안내 문구를 붙인다 (몇 분 차이는 문구 없이)
+FREE_TIME_FILL_MIN = 120  # C3: 저녁 전 자유 시간이 이 이상이면 예비 장소 하나로 메운다
+MENU_MIN_DEPTH = 3  # D3: 업종 경로가 이 단계 이상일 때만 마지막 분류를 '메뉴'로 보고 포함 비교에 쓴다 ('음식점 > 한식' 은 상위 분류)
 
 
 def _path_m(seq: list[dict[str, Any]], start: dict[str, Any] | None = None) -> int:
@@ -1632,18 +1645,67 @@ def _est_arrivals(seq: list[dict[str, Any]], start_min: int, transport: str) -> 
     return out
 
 
-def _lunch_not_too_early(ordered: list[dict[str, Any]], start_min: int, transport: str) -> list[dict[str, Any]]:
-    """M3: 첫 식당 도착이 11:00 보다 이르면 그 뒤의 볼거리·카페 하나를 식당 앞으로 (식당끼리 순서·숙소 끝 자리는 그대로)."""
+def _lunch_not_too_early(
+    ordered: list[dict[str, Any]], start_min: int, transport: str, why: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """M3: 첫 식당 도착이 11:00 보다 이르면 그 뒤의 볼거리·카페를 식당 앞으로 (식당끼리 순서·숙소 끝 자리는 그대로).
+    why 를 주면 결과(옮긴 곳 수와 멈춘 이유)를 한 줄 덧붙인다 (E3 trace)."""
     body = [p for p in ordered if p.get("category") != "숙소"]
     stays = [p for p in ordered if p.get("category") == "숙소"]
-    eat = next((i for i, p in enumerate(body) if p.get("category") == "식당"), None)
-    if eat is None or _est_arrivals(body, start_min, transport)[eat] >= _hhmm_to_min(FIRST_MEAL_NOT_BEFORE):
+
+    def note(text: str) -> None:
+        if why is not None:
+            why.append(text)
+
+    if any(p.get("fixed_order") for p in body):  # 시간대 틀로 이미 정한 순서는 건드리지 않는다
+        note("0곳(fixed_order)")
         return ordered
-    mover = next((j for j in range(eat + 1, len(body)) if body[j].get("category") != "식당"), None)
-    if mover is None:
-        return ordered
-    body.insert(eat, body.pop(mover))
+    not_before, latest = _hhmm_to_min(FIRST_MEAL_NOT_BEFORE), _hhmm_to_min(FIRST_MEAL_LATEST)
+    moved, stop = 0, "최대 2곳"
+    for n in range(FIRST_MEAL_MAX_MOVES):  # D2: 11:00 이상이 되면 바로 멈추고, 최대 2곳
+        eat = next((i for i, p in enumerate(body) if p.get("category") == "식당"), None)
+        if eat is None:
+            stop = "식당 없음"
+            break
+        if _est_arrivals(body, start_min, transport)[eat] >= not_before:
+            stop = "11시 이후"
+            break
+        mover = next((j for j in range(eat + 1, len(body)) if body[j].get("category") != "식당"), None)
+        if mover is None:
+            stop = "옮길 곳 없음"
+            break
+        trial = list(body)
+        trial.insert(eat, trial.pop(mover))
+        if n > 0 and _est_arrivals(trial, start_min, transport)[eat + 1] > latest:  # 둘째를 옮기면 점심이 너무 늦어진다
+            stop = "13:30 상한"
+            break
+        body = trial
+        moved += 1
+    else:  # 최대 2곳을 다 옮긴 뒤: 11:00 에 닿았는지로 이유를 적는다
+        eat = next((i for i, p in enumerate(body) if p.get("category") == "식당"), None)
+        if eat is not None and _est_arrivals(body, start_min, transport)[eat] >= not_before:
+            stop = "11시 이후"
+    note(f"{moved}곳 옮김({stop})")
     return body + stays
+
+
+def _stretch_before_lunch(ordered: list[dict[str, Any]], arrives: list[int], lunch_stay: dict[int, int]) -> str:
+    """E1: 첫 식당 실제 도착이 11:00 전이면 바로 앞에 이어진 볼거리·카페(식당·숙소 제외) 체류를 가까운 것부터 장소당 최대 +30분.
+    순서·구간은 그대로. lunch_stay(id(장소) → 늘린 뒤 체류)를 채우고 trace 한 줄을 돌려준다 (늘린 분 수는 '+N분' 으로 시작)."""
+    first = next((i for i, p in enumerate(ordered) if p.get("category") == "식당"), None)
+    if first is None:
+        return "식당 없음"
+    need = _hhmm_to_min(FIRST_MEAL_NOT_BEFORE) - arrives[first]
+    if need <= 0:
+        return "11시 이후"
+    added, j = 0, first - 1
+    while j >= 0 and need > 0 and ordered[j].get("category") not in ("식당", "숙소"):
+        add = min(LUNCH_STRETCH_MAX, need)
+        lunch_stay[id(ordered[j])] = int(ordered[j].get("stay_min", 60)) + add
+        need, added, j = need - add, added + add, j - 1
+    if not added:
+        return "앞 장소 없음"
+    return f"+{added}분" + (f"(부족, 첫 식당 {_min_to_hhmm(arrives[first] + added)})" if need > 0 else "")
 
 
 def _timeline(
@@ -1689,45 +1751,158 @@ def _push_dinner(
     return gap
 
 
-def _dinner_to_add(
-    ordered: list[dict[str, Any]], start_min: int, limit: int, transport: str, state: dict[str, Any], taken: list[dict[str, Any]], day: int
-) -> tuple[dict[str, Any] | None, bool]:
-    """M4: 저녁 규칙 날에 17:00~20:30 도착 식당이 없고 식당이 2곳 미만이며, 마지막 장소 뒤로 이동 + 60분이 종료 시각 안에
-    들어가면(직선 어림) 이미 받아 둔 카카오 주변 식당(poi_docs) 중 마지막 장소에서 가장 가까운 곳을 고른다. 새 검색·LLM 호출 없음.
-    돌려주는 값: (덧붙일 장소 또는 None, 시간은 되는데 후보가 없었는지)."""
+def _lodging_arrival(ordered: list[dict[str, Any]], arrives: list[int]) -> int | None:
+    """그날 숙소 도착 시각 (숙소가 없으면 None)."""
+    i = next((k for k, p in enumerate(ordered) if p.get("category") == "숙소"), None)
+    return None if i is None else arrives[i]
+
+
+def _added_place_guard(
+    ordered: list[dict[str, Any]], added: dict[str, Any], seq_legs: list[dict[str, Any]], arrives: list[int],
+    lodge_before: int | None, limit: int, transport: str,
+) -> str | None:
+    """E2: M4·C3 로 넣은 장소의 새 두 구간(직전 → 넣은 곳, 넣은 곳 → 다음)이 자차 30분·도보 20분을 넘거나, 넣은 뒤 숙소 도착이
+    종료 시각을 넘으면(넣기 전보다 늦어진 경우만) 되돌릴 이유를 돌려준다. 기존 구간은 보지 않는다. 문제없으면 None."""
+    i = next(k for k, p in enumerate(ordered) if p is added)
+    cap = NEW_LEG_MAX_MIN.get(transport, NEW_LEG_MAX_MIN["walk"])
+    new_legs = [seq_legs[k] for k in (i - 1, i) if 0 <= k < len(seq_legs)]
+    if any(leg["duration_min"] > cap for leg in new_legs):
+        return "이동 시간 초과"
+    lodge = _lodging_arrival(ordered, arrives)
+    if lodge is not None and lodge > limit and (lodge_before is None or lodge > lodge_before):
+        return "숙소 도착 초과"
+    return None
+
+
+def _dinner_index(ordered: list[dict[str, Any]], not_before: dict[int, int]) -> int | None:
+    """저녁 식당 위치: 17:30 에 맞춘 식당(not_before), 없으면 첫 식당이 아닌 마지막 식당. 없으면 None."""
+    i = next((k for k, p in enumerate(ordered) if id(p) in not_before), None)
+    if i is not None:
+        return i
+    eats = [k for k, p in enumerate(ordered) if p.get("category") == "식당"]
+    return eats[-1] if len(eats) >= 2 else None
+
+
+def _body_count(ordered: list[dict[str, Any]]) -> int:
+    """숙소를 뺀 일반 장소 수."""
+    return sum(p.get("category") != "숙소" for p in ordered)
+
+
+def _free_before_dinner(
+    ordered: list[dict[str, Any]], arrives: list[int], seq_legs: list[dict[str, Any]], stay_of: dict[int, int], not_before: dict[int, int]
+) -> int | None:
+    """17:30 에 맞춘 저녁 식당(not_before 가 걸린 장소) 앞의 자유 시간(분). 그런 식당이 없으면 None."""
+    i = next((k for k, p in enumerate(ordered) if id(p) in not_before), None)
+    if not i:
+        return None
+    prev = ordered[i - 1]
+    natural = arrives[i - 1] + stay_of.get(id(prev), int(prev.get("stay_min", 60))) + seq_legs[i - 1]["duration_min"]
+    return max(0, arrives[i] - natural)
+
+
+def _gap_filler(
+    ordered: list[dict[str, Any]], i: int, free: int, state: dict[str, Any], taken: list[dict[str, Any]], day: int, transport: str
+) -> dict[str, Any] | None:
+    """C3: 저녁 식당(ordered[i]) 앞 자유 시간을 메울 예비 장소 하나. verify_places 가 남긴 확인된 예비 후보(spares, Q4 와 같은 풀)에서
+    볼거리 또는 카페(그날 카페 2곳 이상이면 볼거리만). 거르기: 같은 날, 이미 쓴 곳·같은 가게 제외, 뚜벅이는 그날 동선 중심 1.1km 안,
+    비 예보면 야외 한도(_max_outdoor)를 넘기는 야외 장소 제외, 프랜차이즈 카페 제외.
+    고르는 순서: 직선 어림으로 자유 시간 안에 들어가는 것 먼저, 그다음 바로 앞 장소에서 가까운 것. 새 검색·LLM 호출 없음."""
     req = state["request"]
     body = [p for p in ordered if p.get("category") != "숙소"]
-    if not body or sum(p.get("category") == "식당" for p in body) >= 2:
-        return None, False
-    arr = _est_arrivals(body, start_min, transport)
-    lo, hi = (_hhmm_to_min(x) for x in DINNER_WINDOW)
-    if any(lo <= a <= hi for a, p in zip(arr, body, strict=True) if p.get("category") == "식당"):
-        return None, False
-    dinner, stay = _hhmm_to_min(DINNER_AT), 60
-    end_est = arr[-1] + int(body[-1].get("stay_min", 60))
-    if max(end_est, dinner) + stay > limit:
-        return None, False
-    hub = _centroid(body)
-    radius = WALK_OUTLIER_M if transport == "walk" else RAG_RADIUS_M["car_local"]
+    cafes = sum(p.get("category") == "카페" for p in body)
+    hub = min(body, key=lambda a: sum(haversine_m(a["lat"], a["lng"], b["lat"], b["lng"]) for b in body))
+    rain = bool((state.get("weather") or {}).get("rain"))
+    outdoor_n = sum(_is_outdoor(p) for p in body)
     allow_chain = _chains_allowed(req)
     pool = [
-        h for h in state.get("poi_docs", [])
+        s for s in state.get("spares", [])
+        if s.get("verified") and s.get("lat") and s.get("lng") and s.get("day", day) == day
+        and (s.get("category") in PLAY_CATEGORIES or (s.get("category") == "카페" and cafes < 2 and (allow_chain or not _is_chain(s["name"]))))
+        and not any(t.get("name") == s.get("name") or _same_shop(t, s) for t in taken)
+        and not (transport == "walk" and haversine_m(hub["lat"], hub["lng"], s["lat"], s["lng"]) > WALK_OUTLIER_M)
+        and not (rain and _is_outdoor(s) and outdoor_n >= _max_outdoor(req))
+    ]
+    if not pool:
+        return None
+    prev, nxt = ordered[i - 1], ordered[i]
+
+    def extra(s: dict[str, Any]) -> int:
+        return _est_leg_min(prev, s, transport) + int(s.get("stay_min", 60)) + _est_leg_min(s, nxt, transport) - _est_leg_min(prev, nxt, transport)
+
+    return min(pool, key=lambda s: (extra(s) > free, haversine_m(prev["lat"], prev["lng"], s["lat"], s["lng"])))
+
+
+def _same_menu(a: str | None, b: str | None) -> bool:
+    """두 식당의 카카오 업종이 같은 메뉴인지 (D3). 마지막 분류가 같거나, 한쪽 마지막 분류가 다른 쪽 경로 안에 있으면 같은 메뉴
+    ('국수' ↔ '음식점 > 한식 > 국수 > 칼국수'). 단 '음식점 > 한식' 처럼 경로가 짧은 쪽의 마지막 분류는 상위 분류라 포함 비교에 쓰지 않는다."""
+    sa = [s.strip() for s in (a or "").split(">") if s.strip()]
+    sb = [s.strip() for s in (b or "").split(">") if s.strip()]
+    if not sa or not sb:
+        return False
+    if sa[-1] == sb[-1]:
+        return True
+    return (len(sa) >= MENU_MIN_DEPTH and sa[-1] in sb) or (len(sb) >= MENU_MIN_DEPTH and sb[-1] in sa)
+
+
+def _dinner_to_add(
+    ordered: list[dict[str, Any]], arrives: list[int], body_end: int, limit: int, transport: str,
+    state: dict[str, Any], taken: list[dict[str, Any]], day: int,
+) -> tuple[dict[str, Any] | None, str]:
+    """M4: 저녁 규칙 날에 17:00~20:30 도착 식당이 없고 식당이 2곳 미만이며, 마지막 장소 뒤로 이동 + 60분이 종료 시각 안에
+    들어가면 이미 받아 둔 카카오 주변 식당(poi_docs + dinner_pool) 중 마지막 장소에서 가장 가까운 곳을 고른다. 새 검색·LLM 호출 없음.
+    판단은 기존 순서로 이미 계산한 실제 구간의 도착 시각(arrives·body_end)으로 한다 (C2). 새 식당까지의 이동만 직선 어림이고,
+    덧붙인 뒤 실제 구간으로 다시 계산해 넘치면 부르는 쪽에서 되돌린다.
+    돌려주는 값: (덧붙일 장소 또는 None, 이유: 식당 2곳 이상 / 시간대 식당 있음 / 시간 부족 / 후보 없음 / 추가)."""
+    req = state["request"]
+    body_i = [i for i, p in enumerate(ordered) if p.get("category") != "숙소"]
+    body = [ordered[i] for i in body_i]
+    if not body:
+        return None, "시간 부족"
+    if sum(p.get("category") == "식당" for p in body) >= 2:
+        return None, "식당 2곳 이상"
+    lo, hi = (_hhmm_to_min(x) for x in DINNER_WINDOW)
+    if any(lo <= arrives[i] <= hi for i in body_i if ordered[i].get("category") == "식당"):
+        return None, "시간대 식당 있음"
+    dinner, stay = _hhmm_to_min(DINNER_AT), 60
+    end_est = body_end
+    if max(end_est, dinner) + stay > limit:
+        return None, "시간 부족"
+    hub = _centroid(body)
+    last = body[-1]
+    radius = WALK_OUTLIER_M if transport == "walk" else RAG_RADIUS_M["car_local"]
+
+    def near(h: dict[str, Any]) -> bool:
+        """뚜벅이: 동선 중심 1.1km. 자차(D1): 동선 중심 또는 그날 마지막 장소(저녁 직전) 중 한 곳에서 8km 안."""
+        if haversine_m(hub[0], hub[1], h["lat"], h["lng"]) <= radius:
+            return True
+        return transport != "walk" and haversine_m(last["lat"], last["lng"], h["lat"], h["lng"]) <= radius
+
+    allow_chain = _chains_allowed(req)
+    merged: list[dict[str, Any]] = []  # C1: poi_docs + 잘린 식당(dinner_pool), 같은 가게는 한 번만
+    for h in list(state.get("poi_docs", [])) + list(state.get("dinner_pool", [])):
+        if not any(_same_shop(h, m) for m in merged):
+            merged.append(h)
+    pool = [
+        h for h in merged
         if _kakao_food_role(h) == "식당" and (allow_chain or not _is_chain(h["name"]))  # 제과·베이커리는 카페 역할이라 빠진다
-        and haversine_m(hub[0], hub[1], h["lat"], h["lng"]) <= radius
+        and near(h)
         and not any(_same_shop({**h, "category": "식당"}, t) for t in taken)
     ]
     if not pool:
-        return None, True
-    last = body[-1]
-    h = min(pool, key=lambda x: haversine_m(last["lat"], last["lng"], x["lat"], x["lng"]))
+        return None, "후보 없음"
+    # C4·D3: 그날 식당과 같은 메뉴(_same_menu: 칼국수 ↔ 국수 포함)인 후보는 뒤로. 다른 메뉴가 반경 안에 없을 때만 같은 메뉴
+    day_menus = [p.get("kakao_category") or p.get("category_full") or "" for p in body if p.get("category") == "식당"]
+    h = min(pool, key=lambda x: (
+        any(_same_menu(x.get("category_full"), m) for m in day_menus), haversine_m(last["lat"], last["lng"], x["lat"], x["lng"]),
+    ))
     if max(end_est + _est_leg_min(last, h, transport), dinner) + stay > limit:
-        return None, False
+        return None, "시간 부족"
     return {
         "name": h["name"], "category": "식당", "reason": f"{req['region']} 동선에서 가까운 식당", "stay_min": stay, "indoor": True,
         "tags": [], "source": "rag", "est_cost": 0, "day": day, "order": len(ordered) + 1, "verified": True,
         "lat": h["lat"], "lng": h["lng"], "address": h.get("address", ""), "kakao_place_id": h.get("kakao_place_id", ""),
         "place_url": h.get("place_url", ""), "phone": h.get("phone", ""), "kakao_category": h.get("category_full", ""),
-    }, False
+    }, "추가"
 
 
 def _best_order(places: list[dict[str, Any]], start: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -1788,6 +1963,8 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
     editing = bool(state.get("instruction"))
     notes: list[str] = []
     added_dinners: list[dict[str, Any]] = []  # M4 로 덧붙인 식당 (다른 날 같은 가게를 또 넣지 않게)
+    fillers: list[dict[str, Any]] = []  # C3 로 넣은 예비 장소
+    place_cap = MAX_PLACES_PER_DAY_TRIP if req.get("mode") == "trip" else MAX_PLACES_PER_DAY  # M4·C3 로 넣어도 넘지 않는 하루 장소 수 (숙소 제외)
     for day in sorted(by_day):
         ordered = _best_order(by_day[day], start=prev_stay)
         # 거리만 보고 순서를 잡으면 식당 → 식당 처럼 식사가 붙을 수 있다 → 시간대 틀(볼거리 → 점심 → 카페 → … → 저녁)로 다시 줄 세운다
@@ -1809,8 +1986,15 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
         starts = req.get("day_starts") or {}
         start_hhmm = starts.get(day) or starts.get(str(day)) or req.get("start_time", "11:00")
         end_hhmm = req.get("end_time", "23:59")
-        if not editing and _hhmm_to_min(start_hhmm) <= _hhmm_to_min(LUNCH_RULE_START_MAX):
-            ordered = _lunch_not_too_early(ordered, _hhmm_to_min(start_hhmm), transport)  # M3
+        lunch_rule = _hhmm_to_min(start_hhmm) <= _hhmm_to_min(LUNCH_RULE_START_MAX)
+        m3: list[str] = []
+        if not lunch_rule:
+            m3.append("점심 규칙 아님")
+        elif editing:
+            m3.append("수정 흐름")
+        else:
+            ordered = _lunch_not_too_early(ordered, _hhmm_to_min(start_hhmm), transport, m3)  # M3
+        notes.append(f"Day {day} 점심 순서: {m3[0]}")
         prev_stay = next((p for p in ordered if p.get("category") == "숙소"), prev_stay)
         offset = len(places)
         route_cache: dict[tuple[int, int], dict[str, Any]] = {}
@@ -1827,52 +2011,122 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
 
         start_min, limit = _hhmm_to_min(start_hhmm), _hhmm_to_min(end_hhmm)
         stay_of: dict[int, int] = {}  # M2: 늘린 체류 (id(장소) → 분)
+        lunch_stay: dict[int, int] = {}  # E1: 점심 전 늘린 체류 (따로 두어 연장분만 되돌릴 수 있게. M2 와 겹치는 장소는 없다)
         not_before: dict[int, int] = {}  # M2·M4: 이 시각 전에는 도착하지 않는다 (남는 시간은 자유 시간)
 
         def timeline(
             seq: list[dict[str, Any]], seq_legs: list[dict[str, Any]], start_min: int = start_min,
-            stay_of: dict[int, int] = stay_of, not_before: dict[int, int] = not_before,
+            stay_of: dict[int, int] = stay_of, lunch_stay: dict[int, int] = lunch_stay, not_before: dict[int, int] = not_before,
         ) -> tuple[list[int], int]:
-            return _timeline(seq, seq_legs, start_min, stay_of, not_before)
+            return _timeline(seq, seq_legs, start_min, {**stay_of, **lunch_stay}, not_before)
 
         dinner_rule = start_min <= _hhmm_to_min(DINNER_RULE_START_MAX) and limit >= _hhmm_to_min(DINNER_RULE_END_MIN)
         day_label = f"Day {day} " if len(by_day) > 1 else ""
-        added: dict[str, Any] | None = None
-        if dinner_rule and not editing:  # M4: 저녁 식당 덧붙이기 (숙소 앞, 구간·시각은 아래 기존 흐름이 계산)
-            added, no_cand = _dinner_to_add(ordered, start_min, limit, transport, state, list(state.get("verified", [])) + added_dinners, day)
-            if added:
-                ordered = [p for p in ordered if p.get("category") != "숙소"] + [added] + [p for p in ordered if p.get("category") == "숙소"]
-                not_before[id(added)] = _hhmm_to_min(DINNER_AT)
-            elif no_cand:
-                warnings.append(f"{day_label}저녁 식당 후보를 찾지 못했어요")
+        # 기존 순서의 실제 구간·도착 시각 (M4 판단도 이 값으로 한다: C2)
         day_legs = fetch_legs(ordered)
         arrives, body_end = timeline(ordered, day_legs)
-        if added is not None:
-            i = next(k for k, p in enumerate(ordered) if p is added)
-            if body_end > limit:  # 실제 구간으로는 종료 시각을 넘긴다 → 덧붙이지 않는다 (기존 장소는 건드리지 않음)
-                ordered = [p for p in ordered if p is not added]
-                not_before.pop(id(added))
+        # E1: 점심 전 체류 연장 (순서·구간 그대로, fixed_order 날에도). 저녁 처리(M2·M4·C3)보다 먼저
+        if not lunch_rule:
+            e1 = "점심 규칙 아님"
+        elif editing:
+            e1 = "수정 흐름"
+        else:
+            e1 = _stretch_before_lunch(ordered, arrives, lunch_stay)
+            if lunch_stay:
+                arrives, body_end = timeline(ordered, day_legs)
+
+        def apply_m2(
+            ordered: list[dict[str, Any]], arrives: list[int], body_end: int, day_legs: list[dict[str, Any]],
+            stay_of: dict[int, int] = stay_of, not_before: dict[int, int] = not_before, limit: int = limit,
+            dinner_rule: bool = dinner_rule, added_dinners: list[dict[str, Any]] = added_dinners,
+        ) -> tuple[list[int], int]:
+            """M2 (처음 적용·다시 적용 공용). 종료 시각을 넘기면 하지 않는다 (M4 로 덧붙인 식당의 17:30 은 유지)."""
+            if dinner_rule and _push_dinner(ordered, arrives, stay_of, not_before) is not None:
+                new_arrives, new_end = timeline(ordered, day_legs)
+                if new_end > limit:
+                    stay_of.clear()
+                    for k in [k for k in not_before if not any(id(a) == k for a in added_dinners)]:
+                        not_before.pop(k)
+                    return timeline(ordered, day_legs)
+                return new_arrives, new_end
+            return arrives, body_end
+
+        if not dinner_rule:
+            m4 = "저녁 규칙 아님"
+        elif editing:
+            m4 = "수정 흐름"
+        else:  # M4: 저녁 식당 덧붙이기 (숙소 앞). 새로 생기는 두 구간만 계산하고(나머지는 route_cache), 넘치면 덧붙인 것만 되돌린다
+            taken = list(state.get("verified", [])) + added_dinners
+            added, m4 = _dinner_to_add(ordered, arrives, body_end, limit, transport, state, taken, day)
+            if added and _body_count(ordered) + 1 > place_cap:  # 넣으면 하루 장소 수 상한을 넘는다 (구간 계산 전에 거른다)
+                added, m4 = None, "장소 수 상한"
+            if added:
+                lodge_before = _lodging_arrival(ordered, arrives)
+                ordered = [p for p in ordered if p.get("category") != "숙소"] + [added] + [p for p in ordered if p.get("category") == "숙소"]
+                not_before[id(added)] = _hhmm_to_min(DINNER_AT)
                 day_legs = fetch_legs(ordered)
                 arrives, body_end = timeline(ordered, day_legs)
-                notes.append(f"Day {day} 저녁 식당 미추가(실제 이동으로 {end_hhmm} 초과)")
-            else:
-                added_dinners.append(added)
-                notes.append(f"Day {day} 저녁 식당 추가({added['name']})")
-                prev = ordered[i - 1]
-                free = arrives[i] - (arrives[i - 1] + int(prev.get("stay_min", 60)) + day_legs[i - 1]["duration_min"])
-                if free >= FREE_TIME_NOTE_MIN:
-                    warnings.append(f"{day_label}저녁 식사 전 자유 시간 {free}분이 있어요")
-        if dinner_rule:
-            free = _push_dinner(ordered, arrives, stay_of, not_before)  # M2
-            if free is not None:
-                new_arrives, new_end = timeline(ordered, day_legs)
-                if new_end > limit:  # 종료 시각을 넘기면 하지 않는다
-                    stay_of.clear()
-                    not_before.clear()
+                # 실제 구간으로 종료 시각을 넘기거나(C2), 새 구간이 너무 길거나 숙소 도착이 늦어지면(E2) 덧붙인 것만 되돌린다. 다음 후보는 시도하지 않는다
+                why = f"종료 초과로 되돌림({end_hhmm})" if body_end > limit else _added_place_guard(
+                    ordered, added, day_legs, arrives, lodge_before, limit, transport)
+                if why:
+                    ordered = [p for p in ordered if p is not added]
+                    not_before.pop(id(added))
+                    day_legs = fetch_legs(ordered)  # 원래 구간은 route_cache 에 있어 다시 부르지 않는다
+                    arrives, body_end = timeline(ordered, day_legs)
+                    m4 = why
                 else:
-                    arrives, body_end = new_arrives, new_end
-                    if free >= FREE_TIME_NOTE_MIN:
-                        warnings.append(f"{day_label}저녁 식사 전 자유 시간 {free}분이 있어요")
+                    added_dinners.append(added)
+                    m4 = f"추가({added['name']})"
+            elif m4 == "후보 없음":
+                warnings.append(f"{day_label}저녁 식당 후보를 찾지 못했어요")
+        notes.append(f"Day {day} 저녁 식당: {m4}")
+        arrives, body_end = apply_m2(ordered, arrives, body_end, day_legs)  # M2
+        free = _free_before_dinner(ordered, arrives, day_legs, {**stay_of, **lunch_stay}, not_before)
+        if free is not None and free >= FREE_TIME_FILL_MIN and not editing:
+            # C3: 저녁 전 공백이 길면 예비 장소 하나를 저녁 식당 바로 앞에. 새 두 구간만 계산하고, 넘치면 넣은 것만 되돌린다
+            i = next(k for k, p in enumerate(ordered) if id(p) in not_before)
+            taken = list(state.get("verified", [])) + added_dinners + fillers
+            full = _body_count(ordered) + 1 > place_cap  # 넣으면 하루 장소 수 상한을 넘는다
+            pick = None if full else _gap_filler(ordered, i, free, state, taken, day, transport)
+            if full:
+                c3 = "장소 수 상한"
+            elif pick is None:
+                c3 = "예비 없음"
+            else:
+                filler = {**pick, "day": day}
+                before, lodge_before = ordered, _lodging_arrival(ordered, arrives)
+                ordered = ordered[:i] + [filler] + ordered[i:]
+                day_legs = fetch_legs(ordered)
+                arrives, body_end = timeline(ordered, day_legs)
+                why = "종료 초과로 되돌림" if body_end > limit else _added_place_guard(
+                    ordered, filler, day_legs, arrives, lodge_before, limit, transport)
+                if why:
+                    ordered = before
+                    day_legs = fetch_legs(ordered)  # 원래 구간은 route_cache 에 있다
+                    arrives, body_end = timeline(ordered, day_legs)
+                    c3 = why
+                else:
+                    fillers.append(filler)
+                    c3 = f"적용({filler['name']})"
+                free = _free_before_dinner(ordered, arrives, day_legs, {**stay_of, **lunch_stay}, not_before)
+            notes.append(f"Day {day} 빈 시간 보충: {c3}")
+        if lunch_stay:  # E1 최종 검증: 종료 초과·저녁 20:30 초과면 연장분만 되돌린다 (M2·M4·C3 장소·구간은 그대로)
+            dinner_i = _dinner_index(ordered, not_before)
+            late = dinner_i is not None and arrives[dinner_i] > _hhmm_to_min(DINNER_LATEST)
+            if body_end > limit or late:
+                lunch_stay.clear()
+                e1 = "되돌림(종료 초과)" if body_end > limit else f"되돌림(저녁 {DINNER_LATEST} 초과)"
+                if stay_of or any(not any(id(a) == k for a in added_dinners) for k in not_before):  # M2 를 다시 적용
+                    stay_of.clear()
+                    for k in [k for k in not_before if not any(id(a) == k for a in added_dinners)]:
+                        not_before.pop(k)
+                arrives, body_end = timeline(ordered, day_legs)
+                arrives, body_end = apply_m2(ordered, arrives, body_end, day_legs)
+                free = _free_before_dinner(ordered, arrives, day_legs, {**stay_of, **lunch_stay}, not_before)
+        notes.append(f"Day {day} 점심 전 연장: {e1}")
+        if free is not None and free >= FREE_TIME_NOTE_MIN:
+            warnings.append(f"{day_label}저녁 식사 전 자유 시간 {free}분이 있어요")
         dropped: list[str] = []
         # 종료 시각을 넘기면 숙소를 뺀 마지막 장소부터 덜어낸다 (최소 2곳은 남긴다)
         while body_end > limit and sum(1 for p in ordered if p.get("category") != "숙소") > 2:
@@ -1886,7 +2140,8 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
         if body_end > limit:
             warnings.append(f"Day {day} 일정이 종료 시각({end_hhmm})을 넘겨요 ({_min_to_hhmm(body_end)} 끝). 체류 시간을 줄여보세요")
         for i, p in enumerate(ordered):
-            stretched = {"stay_min": stay_of[id(p)]} if id(p) in stay_of else {}
+            eff = {**stay_of, **lunch_stay}
+            stretched = {"stay_min": eff[id(p)]} if id(p) in eff else {}
             places.append({**p, **stretched, "order": i + 1, "day": day, "arrive": _min_to_hhmm(arrives[i])})
             if i < len(day_legs):
                 leg = day_legs[i]
