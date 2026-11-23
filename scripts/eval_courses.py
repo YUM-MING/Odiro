@@ -362,14 +362,19 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
 
 
 TRACE_DETAIL_MAX = 1000  # detail 한 줄 최대 글자 수 (원본 응답·좌표는 저장하지 않는다)
+TRACE_DEBUG_MAX = 3000  # 내부 판단 기록(debug) 최대 글자 수 (날마다 몇 줄씩이라 detail 보다 길다)
 
 
 def trace_of(resp: CourseResponse) -> list[dict[str, Any]]:
-    """meta.trace 를 노드·상태·시간·detail 텍스트만 남겨 저장용으로. 없으면 빈 목록."""
-    return [
-        {"node": t.node, "status": t.status, "ms": t.ms, "detail": (t.detail or "")[:TRACE_DETAIL_MAX]}
-        for t in (resp.meta.trace or [])
-    ]
+    """meta.trace 를 노드·상태·시간·detail·debug 텍스트만 남겨 저장용으로. 없으면 빈 목록.
+    debug 는 값이 있는 단계만 넣는다 (예전 결과 파일은 판단 기록이 detail 에 섞여 있고 debug 키가 없다)."""
+    out = []
+    for t in resp.meta.trace or []:
+        step: dict[str, Any] = {"node": t.node, "status": t.status, "ms": t.ms, "detail": (t.detail or "")[:TRACE_DETAIL_MAX]}
+        if getattr(t, "debug", ""):
+            step["debug"] = t.debug[:TRACE_DEBUG_MAX]
+        out.append(step)
+    return out
 
 
 def comp_text(comp: dict[str, dict[str, int]]) -> str:

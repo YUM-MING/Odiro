@@ -343,10 +343,10 @@ def test_trace_is_saved_as_short_steps_and_old_results_still_work(tmp_path):
     places = [_p(1, "a", "관광지"), _p(2, "b", "식당"), _p(3, "c", "카페")]
     r = _resp(places)
     r.meta.trace = [TraceStep(node="verify_places", status="done", ms=1200, detail="3/3 확인"),
-                    TraceStep(node="optimize_route", status="done", ms=300, detail="3곳 2구간 / Day 1 저녁 식당: 후보 없음")]
+                    TraceStep(node="optimize_route", status="done", ms=300, detail="3곳 2구간", debug="Day 1 저녁 식당: 후보 없음")]
     m = ev.evaluate(r, CENTER, 1500)
     assert m["trace"] == [{"node": "verify_places", "status": "done", "ms": 1200, "detail": "3/3 확인"},
-                          {"node": "optimize_route", "status": "done", "ms": 300, "detail": "3곳 2구간 / Day 1 저녁 식당: 후보 없음"}]
+                          {"node": "optimize_route", "status": "done", "ms": 300, "detail": "3곳 2구간", "debug": "Day 1 저녁 식당: 후보 없음"}]
     assert ev.render_table({"x": m}) == ev.render_table({"x": {k: v for k, v in m.items() if k != "trace"}})  # 표는 그대로
     # trace 가 없는 옛 결과와 섞어도 요약·비교가 된다
     old = {k: v for k, v in m.items() if k != "trace"}
