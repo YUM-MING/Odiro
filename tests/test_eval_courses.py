@@ -413,6 +413,23 @@ def test_time_of_day_old_results_compatible(tmp_path):
     assert "늦은 점심" in cmp.splitlines()[0] and "| gapyeong_preset |" in cmp
 
 
+def test_time_summary_does_not_hide_unknown_runs(tmp_path):
+    # D3-3: 묶음 3 지표가 없는 옛 실행과 새 실행을 합칠 때, 미확인을 0 으로 더한 것처럼 보이면 안 된다 (_origin_cells 와 같은 표시)
+    places = [("설미재미술관", "관광지", "11:00", 120, ""), ("카페드모파상", "카페", "13:23", 60, ""), ("산이좋은사람들", "식당", "15:01", 90, ""),
+              ("청평자연휴양림", "관광지", "17:06", 120, CP)]
+    new = ev.evaluate(_resp_day(places, [23, 38, 35], rain=True, pop=0.6), CENTER, 100_000)
+    old = {k: v for k, v in new.items() if k != "time_of_day"}
+    cells = ev._time_cells([old, new])
+    assert cells == ["1+미확인 1회", "1/1+미확인 1회", "2일", "1/1회+미확인 1회", "1+미확인 1회", "7.0 (미확인 1회 제외)"]
+    assert ev._time_cells([new, new]) == ["2", "2/2", "2일", "2/2회", "2", "7.0"]  # 모두 알면 예전처럼 합계
+    assert ev._time_cells([old, old]) == ["-", "-", "2일", "-", "-", "-"]  # 모두 모르면 '-' (늦은 점심은 일정 원자료로 계산)
+    assert ev._time_cells([new])[:2] == ["1", "1/1"] and ev._time_cells([old])[0] == "-"  # 한 번 실행 표시는 그대로
+    (tmp_path / "a.json").write_text(json.dumps({"date": "2026-11-28", "results": {"gapyeong_preset": old}}), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps({"date": "2026-11-28", "results": {"gapyeong_preset": new}}), encoding="utf-8")
+    row = next(line for line in ev.summarize(ev.expand_paths([str(tmp_path / "*.json")])).splitlines() if line.startswith("| gapyeong_preset |"))
+    assert "| 1+미확인 1회 | 1/1+미확인 1회 | 2일 |" in row
+
+
 # ---------- 묶음 4 지표: 코스의 체인 수(사용자 지정 구분) · 자동 보충 술집 수 ----------
 
 

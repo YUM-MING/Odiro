@@ -380,16 +380,25 @@ def time_metrics_of(m: dict[str, Any]) -> dict[str, Any]:
 
 
 def _time_cells(ms: list[dict[str, Any]]) -> list[str]:
-    """표 칸: 해진뒤야외 | 마감후도착(위반/판정) | 늦은점심(날) | 비규칙 | 식당전장거리 | 웹. 여러 실행이면 합계(웹은 평균)."""
+    """표 칸: 해진뒤야외 | 마감후도착(위반/판정) | 늦은점심(날) | 비규칙 | 식당전장거리 | 웹. 여러 실행이면 합계(웹은 평균).
+    전부 모르면 '-', 일부만 모르면 '합+미확인 N회' (지표가 없는 옛 실행을 0 으로 더한 것처럼 보이지 않게, _origin_cells 와 같다)."""
     ts = [time_metrics_of(m) for m in ms]
+
+    def unknown_of(known: int) -> str:
+        unknown = len(ts) - known
+        return f"+미확인 {unknown}회" if unknown else ""
 
     def total(key: str) -> str:
         vals = [t[key] for t in ts if t.get(key) is not None]
-        return str(sum(vals)) if vals else "-"
+        return f"{sum(vals)}{unknown_of(len(vals))}" if vals else "-"
 
-    entry = f"{total('after_entry')}/{total('entry_judged')}" if any(t.get("entry_judged") is not None for t in ts) else "-"
+    judged = [t for t in ts if t.get("entry_judged") is not None]
+    entry = (
+        f"{sum(t.get('after_entry') or 0 for t in judged)}/{sum(t['entry_judged'] for t in judged)}{unknown_of(len(judged))}"
+        if judged else "-"
+    )
     lunch_vals = [len(t["late_lunch_days"]) for t in ts if t.get("late_lunch_days") is not None]
-    lunch = f"{sum(lunch_vals)}일" if lunch_vals else "-"
+    lunch = f"{sum(lunch_vals)}일{unknown_of(len(lunch_vals))}" if lunch_vals else "-"
     rains = [t for t in ts if t.get("rain_rule") is not None]
     if not rains:
         rain = "-"
@@ -397,9 +406,15 @@ def _time_cells(ms: list[dict[str, Any]]) -> list[str]:
         pop = f"{round((rains[0].get('pop') or 0) * 100)}%"
         rain = f"발동({pop})" if rains[0]["rain_rule"] else f"-({pop})"
     else:
-        rain = f"{sum(bool(t['rain_rule']) for t in rains)}/{len(rains)}회"
+        rain = f"{sum(bool(t['rain_rule']) for t in rains)}/{len(rains)}회{unknown_of(len(rains))}"
     webs = [t["web_docs"] for t in ts if t.get("web_docs") is not None]
-    web = "-" if not webs else (str(webs[0]) if len(ts) == 1 else f"{sum(webs) / len(webs):.1f}")
+    if not webs:
+        web = "-"
+    elif len(ts) == 1:
+        web = str(webs[0])
+    else:
+        unknown = len(ts) - len(webs)
+        web = f"{sum(webs) / len(webs):.1f}" + (f" (미확인 {unknown}회 제외)" if unknown else "")
     return [total("dark_outdoor"), entry, lunch, rain, total("long_pre_meal_legs"), web]
 
 
