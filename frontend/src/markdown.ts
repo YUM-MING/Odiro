@@ -30,9 +30,21 @@ export function splitAnswer(md: string): { head: string; tail: string } {
       continue
     }
     if (/^\s*↳/.test(line)) continue
+    // 장소 줄이 줄바꿈으로 나뉘어 온 꼬리(예상 비용·주차장·리뷰·추천 이유)는 카드가 이미 보여 주므로 버린다
+    if (afterPlaces && isPlaceTail(line)) continue
     ;(afterPlaces ? tail : head).push(line)
   }
   return { head: head.join('\n').trim(), tail: tail.join('\n').trim() }
+}
+
+/**
+ * 장소 항목의 꼬리로만 쓰이는 조각인지. answer_md 의 장소 형식
+ * `**장소명** (도착 HH:MM · 체류 N분 · 약 N원) — 이유 🅿 주차장 (약 Nm) 💬 리뷰` 이 줄바꿈으로 끊겨
+ * 다음 줄이 `(약 20,000원) · 🅿 …`, `· 약 N원`, `🅿 …`, `💬 …`, `— 이유` 로 시작할 때만 해당한다.
+ * 팁·안내·경고 문장(예: '**팁** …', '비 예보가 있어요')은 이런 기호로 시작하지 않으므로 그대로 남는다.
+ */
+export function isPlaceTail(line: string): boolean {
+  return /^\s*(?:\(\s*(?:도착\s*\d|약\s*[\d,]+\s*원|체류\s*\d)|[·•]\s*(?:약\s*[\d,]+\s*원|🅿|체류\s*\d)|🅿|💬|[—–]\s)/u.test(line)
 }
 
 export function renderMarkdown(md: string): string {

@@ -28,6 +28,7 @@ import * as I from './Icons'
 import MapView from './MapView'
 import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoRouteLink, kakaoToLink, kindColor, legLabel, placeKind, type Kind } from './mapUtil'
 import { renderMarkdown, splitAnswer } from './markdown'
+import { quickActions } from './quick'
 import { EDIT_NODES, GENERATE_NODES, MOCK_ENABLED, mockCourse, mockEdit, simulateProgress } from './mock'
 import Progress from './Progress'
 import { initialSteps, type StepState } from './steps'
@@ -42,11 +43,6 @@ interface ChatMsg {
   course?: CourseResponse
 }
 
-const QUICK_GLOBAL = [
-  { label: '더 조용한 곳으로', instruction: '전체적으로 더 조용하고 한적한 곳 위주로 바꿔줘' },
-  { label: '실내 위주로', instruction: '비 와도 괜찮게 실내 장소 위주로 바꿔줘' },
-  { label: '예산 낮춰줘', instruction: '예산을 30% 정도 낮춰서 가성비 좋은 곳으로 바꿔줘' },
-]
 
 export default function Plan() {
   const navigate = useNavigate()
@@ -680,7 +676,7 @@ export default function Plan() {
 
           {course && phase !== 'running' && (
             <div className="quick" aria-label="빠른 수정">
-              {QUICK_GLOBAL.map((q) => (
+              {quickActions(course).map((q) => (
                 <button key={q.label} className="quick-btn" onClick={() => edit(q.instruction)}>
                   {q.label}
                 </button>
