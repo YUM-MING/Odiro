@@ -27,7 +27,7 @@ import DayTabs from './DayTabs'
 import * as I from './Icons'
 import MapView from './MapView'
 import { DAY_COLORS, KIND_COLOR, KIND_LABEL, kakaoRouteLink, kakaoToLink, kindColor, legLabel, placeKind, type Kind } from './mapUtil'
-import { renderMarkdown, splitAnswer } from './markdown'
+import { mergePlaceTails, renderMarkdown, splitAnswer } from './markdown'
 import { quickActions } from './quick'
 import { EDIT_NODES, GENERATE_NODES, MOCK_ENABLED, mockCourse, mockEdit, simulateProgress } from './mock'
 import Progress from './Progress'
@@ -547,7 +547,7 @@ export default function Plan() {
                     <div
                       className="md"
                       dangerouslySetInnerHTML={{
-                        __html: renderMarkdown(m.course && m.course.course_id === course?.course_id ? splitAnswer(m.text).head : m.text),
+                        __html: renderMarkdown(m.course && m.course.course_id === course?.course_id ? splitAnswer(m.text).head : mergePlaceTails(m.text)),
                       }}
                     />
                     {m.course && m.course.course_id === course?.course_id && (

@@ -38,6 +38,31 @@ export function splitAnswer(md: string): { head: string; tail: string } {
 }
 
 /**
+ * 이전 답변(카드 없이 글 목록으로 보이는 답변)용: 줄바꿈으로 떨어져 나온 장소 꼬리(isPlaceTail)를 바로 앞 번호 항목 끝에 붙인다.
+ * 비용·주차장·리뷰 같은 정보는 그대로 남기고(숨기지 않는다) 항목 밖에 따로 뜨지 않게만 한다.
+ * 앞에 번호 항목이 없거나, 그 사이에 다른 문장이 있으면 붙이지 않는다. 빈 줄·이동 안내(↳)는 건너뛰고 찾는다.
+ */
+export function mergePlaceTails(md: string): string {
+  const out: string[] = []
+  let item = -1 // 붙일 대상인 마지막 번호 항목의 out 위치
+  for (const raw of md.replace(/\r\n/g, '\n').split('\n')) {
+    const line = raw.trimEnd()
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      item = out.length
+      out.push(line)
+      continue
+    }
+    if (item >= 0 && isPlaceTail(line)) {
+      out[item] = `${out[item]} ${line.trim()}`
+      continue
+    }
+    if (line.trim() && !/^\s*↳/.test(line)) item = -1
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
+/**
  * 장소 항목의 꼬리로만 쓰이는 조각인지. answer_md 의 장소 형식
  * `**장소명** (도착 HH:MM · 체류 N분 · 약 N원) — 이유 🅿 주차장 (약 Nm) 💬 리뷰` 이 줄바꿈으로 끊겨
  * 다음 줄이 `(약 20,000원) · 🅿 …`, `· 약 N원`, `🅿 …`, `💬 …`, `— 이유` 로 시작할 때만 해당한다.
