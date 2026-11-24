@@ -1065,7 +1065,8 @@ def test_m4_not_added_when_not_a_dinner_day_or_two_restaurants_or_editing(monkey
 
 def test_m4_warns_when_no_candidate(monkeypatch):
     _route_by_distance(monkeypatch)
-    pois = [p for p in _IKSEON_POIS if p["name"] in ("멀리고깃집", "익선베이커리", "김밥천국 종로점")]
+    # 묶음 4 부터 체인(김밥천국)은 빼지 않고 후순위로 쓴다 → '후보 없음' 은 반경 밖·제과점·이미 쓴 가게뿐인 경우로 본다
+    pois = [p for p in _IKSEON_POIS if p["name"] in ("멀리고깃집", "익선베이커리")]
     pois.append(_food_poi("점심국밥", 37.5742, 126.9895) | {"kakao_place_id": "점심국밥"})  # 이미 코스에 있는 가게
     out = _opt(_ikseon_day(), start="11:00", end="19:00", poi_docs=pois)
     assert len(out["places"]) == 4
@@ -1897,3 +1898,193 @@ def test_l1_does_not_change_early_start_m3_days(monkeypatch):
 def _no_local_intro_file(monkeypatch):
     """optimize_route 의 S1 이 로컬 data/tour_intro.json 을 읽지 않게 (테스트가 데이터 파일에 따라 달라지지 않도록). _intro() 로 덮어쓴다."""
     monkeypatch.setattr(nodes.tour_intro, "find_intro", lambda name, lat, lng: None)
+
+
+# ---------- 묶음 4: P1 프랜차이즈 후순위 · P2 예비 풀 순서 · P3 술집 자동 보충 제외 ----------
+
+CHAESUNDANG = {"name": "채선당월남쌈&샤브샤브 성수점", "lat": 37.5446, "lng": 127.0557, "kakao_place_id": "f-chain", "category_group": "FD6",
+               "address": "", "category_full": "음식점 > 샤브샤브 > 채선당 > 채선당월남쌈&샤브샤브"}
+LOCAL_EAT = {"name": "성수동밥집", "lat": 37.5452, "lng": 127.0566, "kakao_place_id": "f-local", "category_group": "FD6",
+             "address": "", "category_full": "음식점 > 한식"}
+STARBUCKS = {"name": "스타벅스 서울숲역", "lat": 37.5447, "lng": 127.0558, "kakao_place_id": "c-chain", "category_group": "CE7",
+             "address": "", "category_full": "음식점 > 카페 > 커피전문점 > 스타벅스"}
+LOCAL_CAFE = {"name": "성수커피", "lat": 37.5452, "lng": 127.0566, "kakao_place_id": "c-local", "category_group": "CE7",
+              "address": "", "category_full": "음식점 > 카페"}
+
+
+def test_p1_chain_list_brands_and_no_generic_words():
+    for name in ("채선당월남쌈&샤브샤브 성수점", "오발탄 서울숲점", "두끼떡볶이 NC전주점", "동대문엽기떡볶이 전주중앙점", "청년다방 전주객사점", "스타벅스 서울숲역"):
+        assert nodes._is_chain(name), name
+    for name in ("성수커피", "커피한잔", "동네카페", "카페드모파상", "테라로사 사천해변점", "전주현대옥 전주한옥마을점", "가마솥순대국밥 서울숲역점"):
+        assert not nodes._is_chain(name), name  # 동네 가게·검토 후보는 걸리지 않는다
+    assert not any(k in ("카페", "커피", "치킨", "식당", "맛집", "분식") or len(k) < 2 for k in nodes._CHAIN_KEYS)
+
+
+def test_p1_m4_dinner_prefers_non_chain_and_falls_back_to_chain(monkeypatch):
+    _route_by_distance(monkeypatch)
+    near_chain = _food_poi("채선당 익선점", 37.5748, 126.9906, full="음식점 > 샤브샤브 > 채선당 > 채선당")
+    local = _food_poi("동네백반", 37.5752, 126.9912)
+    out = _opt(_ikseon_day(), start="11:00", end="19:00", poi_docs=[near_chain, local])
+    assert out["places"][-1]["name"] == "동네백반"  # 체인이 더 가까워도 일반 가게 먼저
+    out = _opt(_ikseon_day(), start="11:00", end="19:00", poi_docs=[near_chain])
+    assert out["places"][-1]["name"] == "채선당 익선점"  # 체인뿐이면 필수 조건(반경·시간)을 지키는 선에서 후순위로
+    assert "체인 1곳(채선당 익선점: 자동 보충 M4)" in out["trace"][-1]["debug"]
+
+
+def test_p1_q5_and_known_used_prefer_non_chain(fake_verify):
+    # Q5: 카페 없는 날 → 스타벅스(가까움)보다 동네 카페
+    cands = [_p("A"), _p("B", lat=37.5446), _p("C식당", "식당", lat=37.5447)]
+    out = nodes.verify_places(_state(cands, poi_docs=[STARBUCKS, LOCAL_CAFE]))
+    assert "성수커피" in [p["name"] for p in out["verified"]] and "스타벅스 서울숲역" not in [p["name"] for p in out["verified"]]
+    out = nodes.verify_places(_state([_p("A"), _p("B", lat=37.5446), _p("C식당", "식당", lat=37.5447)], poi_docs=[STARBUCKS]))
+    assert "스타벅스 서울숲역" in [p["name"] for p in out["verified"]]  # 체인뿐이면 후순위로 (예전에는 카페 없이 구성)
+    # 확인된 후보로 채움: 확인 실패한 식당 자리 → 채선당보다 동네 식당
+    cands = [_p("A"), {"name": "없는식당", "category": "식당", "day": 1, "order": 2, "verified": False}, _p("C카페", "카페", lat=37.5447)]
+    out = nodes.verify_places(_state(cands, poi_docs=[CHAESUNDANG, LOCAL_EAT]))
+    assert "성수동밥집" in [p["name"] for p in out["verified"]]
+
+
+def test_p1_llm_chain_restored_only_when_no_other_candidate(fake_verify):
+    cands = [_p("A"), _p("채선당월남쌈&샤브샤브 성수점", "식당", lat=37.5446), _p("C카페", "카페", lat=37.5447)]
+    out = nodes.verify_places(_state([dict(c) for c in cands], poi_docs=[LOCAL_EAT]))
+    assert [p["name"] for p in out["verified"]] == ["A", "성수동밥집", "C카페"]  # 일반 후보가 있으면 바꾼다
+    out = nodes.verify_places(_state([dict(c) for c in cands], poi_docs=[]))
+    assert [p["name"] for p in out["verified"]] == ["A", "채선당월남쌈&샤브샤브 성수점", "C카페"]  # 없으면 빈 자리 대신 원래 체인 유지
+
+
+def test_p1_user_specified_chain_is_kept(fake_verify):
+    cands = [_p("A"), _p("채선당월남쌈&샤브샤브 성수점", "식당", lat=37.5446), _p("C카페", "카페", lat=37.5447)]
+    out = nodes.verify_places(_state([dict(c) for c in cands], poi_docs=[LOCAL_EAT], request={"free_text": "채선당 꼭 가고 싶어"}))
+    assert "채선당월남쌈&샤브샤브 성수점" in [p["name"] for p in out["verified"]]  # 자유 조건에 직접 적은 체인
+    old = _p("원래카페", "카페", order=3)
+    edit = [_p("A", order=1), _p("B", "식당", order=2), _p("스타벅스 서울숲역", "카페", order=3, lat=37.5447)]
+    out = nodes.verify_places(_state(edit, edit_slot={"index": 2, "old": old, "planned": "스타벅스 서울숲역"}, instruction="3번째를 스타벅스로 바꿔줘"))
+    assert out["verified"][2]["name"] == "스타벅스 서울숲역"  # 수정 요청으로 직접 지정한 체인
+
+
+def test_p2_spare_pool_puts_chains_last(fake_verify):
+    cands = [_p("A"), _p("B", "식당", lat=37.5446), {"name": "없는카페", "category": "카페", "day": 1, "order": 3, "verified": False}]
+    spares = [_p("스타벅스 서울숲역", "카페", order=0, lat=37.5447), _p("동네카페", "카페", order=0, lat=37.5448)]
+    out = nodes.verify_places(_state([dict(c) for c in cands], [dict(s) for s in spares]))
+    assert out["verified"][2]["name"] == "동네카페"  # 예전에는 풀이 체인 거르기 전에 만들어져 스타벅스가 먼저 들어갔다
+    out = nodes.verify_places(_state([dict(c) for c in cands], [dict(spares[0])]))
+    assert out["verified"][2]["name"] == "스타벅스 서울숲역"  # 체인뿐이면 후순위로
+
+
+def test_p2_c3_filler_prefers_non_chain(monkeypatch):
+    _const_routes(monkeypatch, 10)
+    spares = [_spare("스타벅스 강문점", "카페", 37.7961, 128.9191), _spare("오죽헌", "관광지", 37.7966, 128.9196, 90)]
+    out = _opt(_gangneung_d1(), start="09:00", end="20:00", transport="car", poi_docs=_GN_POOL, spares=spares)
+    names = [p["name"] for p in out["places"]]
+    assert "오죽헌" in names and "스타벅스 강문점" not in names
+
+
+def test_p3_bar_detection_uses_kakao_category_only():
+    assert nodes._is_bar({"name": "버드나무브루어리", "category_full": "음식점 > 술집 > 호프,요리주점"})
+    assert nodes._is_bar({"name": "부엌 홍대점", "category_full": "술집 > 실내포장마차"})
+    assert not nodes._is_bar({"name": "바다횟집", "category_full": "음식점 > 한식 > 해물,생선"})  # 이름의 '바'
+    assert not nodes._is_bar({"name": "OO브루어리 카페", "category_full": "음식점 > 카페"})
+    assert not nodes._is_bar({"name": "채선당", "category_full": "음식점 > 샤브샤브 > 채선당", "reason": "정갈한 한식 요리주점"})  # 설명은 근거가 아니다
+    assert nodes._is_bar({"name": "x", "kakao_category": "음식점 > 술집 > 와인바"})
+
+
+def test_p3_m4_skips_bars(monkeypatch):
+    _route_by_distance(monkeypatch)
+    pub = _food_poi("골목브루어리", 37.5748, 126.9906, full="음식점 > 술집 > 호프,요리주점")
+    hof = _food_poi("호프한잔", 37.5749, 126.9907, full="음식점 > 술집 > 호프,요리주점")
+    hansik = _food_poi("한옥밥상", 37.5752, 126.9912)
+    out = _opt(_ikseon_day(), start="11:00", end="19:00", poi_docs=[pub, hof])
+    assert len(out["places"]) == 4 and "저녁 식당 후보를 찾지 못했어요" in out["warnings"]
+    out = _opt(_ikseon_day(), start="11:00", end="19:00", poi_docs=[pub, hansik])
+    assert out["places"][-1]["name"] == "한옥밥상"
+    sea = _food_poi("바다횟집", 37.5748, 126.9906, full="음식점 > 한식 > 해물,생선")
+    assert _opt(_ikseon_day(), start="11:00", end="19:00", poi_docs=[sea])["places"][-1]["name"] == "바다횟집"
+
+
+def test_p3_q5_skips_bars_and_draft_bar_is_kept(fake_verify):
+    bar = {"name": "골목포차", "lat": 37.5446, "lng": 127.0557, "kakao_place_id": "b1", "category_group": "FD6", "address": "",
+           "category_full": "술집 > 실내포장마차"}
+    cands = [_p("A"), _p("B", lat=37.5446), _p("C카페", "카페", lat=37.5447)]
+    out = nodes.verify_places(_state(cands, poi_docs=[bar]))
+    assert "골목포차" not in [p["name"] for p in out["verified"]]  # 식당 없는 날 자동 보충에 술집은 쓰지 않는다
+    draft = [_p("A"), _p("골목포차", "식당", lat=37.5446, kakao_category="술집 > 실내포장마차"), _p("C카페", "카페", lat=37.5447)]
+    out = nodes.verify_places(_state(draft, poi_docs=[LOCAL_EAT]))
+    assert "골목포차" in [p["name"] for p in out["verified"]]  # LLM 초안이 고른 술집은 유지
+
+
+def test_p3_swap_fallback_filter():
+    hits = [{**STARBUCKS, "name": "스타벅스 서울숲역"}, LOCAL_CAFE]
+    assert [h["name"] for h in nodes._auto_candidates(hits, "카페", allow_chain=False)] == ["성수커피", "스타벅스 서울숲역"]
+    bar = {"name": "골목포차", "category_group": "FD6", "category_full": "술집 > 실내포장마차", "lat": 0, "lng": 0}
+    assert [h["name"] for h in nodes._auto_candidates([bar, LOCAL_EAT, CHAESUNDANG], "식당", allow_chain=False)] == ["성수동밥집", "채선당월남쌈&샤브샤브 성수점"]
+
+
+def test_p3_spare_fill_skips_bars_for_restaurant_and_any_role_slots(fake_verify):
+    # after-p 강릉 D2 재현: 식당 자리가 확인 실패 → 예비 '버드나무브루어리'(카카오 업종 술집)가 자동으로 채워졌다
+    pub = _p("버드나무브루어리", "식당", order=0, lat=37.5447, kakao_category="음식점 > 술집 > 호프,요리주점")
+    local = _p("동네백반", "식당", order=0, lat=37.5448, kakao_category="음식점 > 한식")
+    cands = [_p("A"), _p("B카페", "카페", lat=37.5446), {"name": "없는식당", "category": "식당", "day": 1, "order": 3, "verified": False}]
+    out = nodes.verify_places(_state([dict(c) for c in cands], [dict(pub), dict(local)]))
+    assert out["verified"][2]["name"] == "동네백반"  # 술집 예비는 건너뛴다
+    out = nodes.verify_places(_state([dict(c) for c in cands], [dict(pub)]))
+    assert "버드나무브루어리" not in [p["name"] for p in out["verified"]]  # 술집뿐이면 채우지 않는다 (다른 경로·후보 없음 처리)
+    # 볼거리 자리의 '아무 역할' 대체에도 술집 예비는 쓰지 않는다
+    attr = [{"name": "없는전시", "category": "관광지", "day": 1, "order": 1, "verified": False}, _p("B", "식당", order=2), _p("C", "카페", order=3), _p("D", "놀거리", order=4)]
+    out = nodes.verify_places(_state(attr, [dict(pub)], request={"transport": "car"}))
+    assert "버드나무브루어리" not in [p["name"] for p in out["verified"]]
+    # 수정 흐름: 사용자 요청으로 받은 예비(대안)는 그대로 쓴다
+    old = _p("원래식당", "식당", order=3)
+    edit = [_p("A", order=1), _p("B카페", "카페", order=2), {"name": "없는곳", "category": "식당", "day": 1, "order": 3, "verified": False}]
+    out = nodes.verify_places(_state(edit, [dict(pub)], edit_slot={"index": 2, "old": old, "planned": "없는곳"}, instruction="3번째를 수제맥주집으로"))
+    assert out["verified"][2]["name"] == "버드나무브루어리"
+
+
+# ---------- 묶음 4 보완 2: '꼭 넣을 곳' 의 체인 — 브랜드를 직접 적었을 때만 사용자 지정 ----------
+
+SEA_CHAIN = {"name": "스타벅스 강릉강문해변점", "lat": 37.5446, "lng": 127.0557, "kakao_place_id": "m-chain", "category_group": "CE7",
+             "address": "", "category_full": "음식점 > 카페 > 커피전문점 > 스타벅스", "keyword": "바다뷰카페"}
+SEA_LOCAL = {"name": "강문바다카페", "lat": 37.5452, "lng": 127.0566, "kakao_place_id": "m-local", "category_group": "CE7",  # 체인보다 멀다
+             "address": "", "category_full": "음식점 > 카페", "keyword": "바다뷰카페"}
+
+
+def _must_state(free_text, must_docs, cands=None, **kw):
+    cands = cands or [_p("A"), _p("B", lat=37.5446), _p("C식당", "식당", lat=37.5447)]
+    return _state(cands, must_docs=must_docs, must_keywords=["바다뷰카페"], request={"free_text": free_text}, **kw)
+
+
+def test_must_general_description_prefers_non_chain_candidate(fake_verify):
+    out = nodes.verify_places(_must_state("바다가 보이는 카페 꼭 포함", [SEA_CHAIN, SEA_LOCAL]))
+    names = [p["name"] for p in out["verified"]]
+    assert "강문바다카페" in names and "스타벅스 강릉강문해변점" not in names
+
+
+def test_must_general_description_uses_chain_when_only_chain_meets_condition(fake_verify):
+    # 조건(바다뷰)을 충족하는 후보는 체인뿐 — 바다가 안 보이는 동네 카페(poi_docs)는 조건 후보가 아니므로 체인을 고른다
+    out = nodes.verify_places(_must_state("바다가 보이는 카페 꼭 포함", [SEA_CHAIN], poi_docs=[LOCAL_CAFE]))
+    chain = next(p for p in out["verified"] if p["name"] == "스타벅스 강릉강문해변점")
+    req = {"free_text": "바다가 보이는 카페 꼭 포함"}
+    assert nodes._place_origin(chain, req, None) == "꼭 넣을 곳(시스템 선택)"
+    assert "스타벅스 강릉강문해변점: 꼭 넣을 곳(시스템 선택)" in nodes._origin_note(out["verified"], req, None)
+
+
+def test_must_draft_chain_swapped_for_non_chain_must_candidate(fake_verify):
+    # 초안이 조건에 맞는 체인을 골랐어도, 같은 조건의 일반 후보가 있으면 그쪽으로 (장소 수는 그대로)
+    cands = [_p("A"), _p("스타벅스 강릉강문해변점", "카페", lat=37.5446, kakao_place_id="m-chain"), _p("C식당", "식당", lat=37.5447)]
+    out = nodes.verify_places(_must_state("바다가 보이는 카페 꼭 포함", [SEA_CHAIN, SEA_LOCAL], cands))
+    assert [p["name"] for p in out["verified"]] == ["A", "강문바다카페", "C식당"]
+
+
+def test_must_brand_named_is_user_specified(fake_verify):
+    cands = [_p("A"), _p("스타벅스 강릉강문해변점", "카페", lat=37.5446, kakao_place_id="m-chain"), _p("C식당", "식당", lat=37.5447)]
+    out = nodes.verify_places(_must_state("스타벅스 꼭 넣어줘", [SEA_CHAIN, SEA_LOCAL], cands))
+    chain = next(p for p in out["verified"] if p["name"] == "스타벅스 강릉강문해변점")
+    assert nodes._place_origin(chain, {"free_text": "스타벅스 꼭 넣어줘"}, None) == "사용자 지정"
+
+
+def test_chain_exclusion_request_is_not_user_specified():
+    assert nodes._chain_requested("스타벅스 꼭 넣어줘") and nodes._chain_requested("이디야 커피 가고 싶어")
+    for text in ("스타벅스 빼줘", "스타벅스 말고 조용한 카페", "스타벅스는 제외", "프랜차이즈 없이, 스타벅스 싫어", "바다가 보이는 카페 꼭 포함", "", None):
+        assert not nodes._chain_requested(text), text
+    assert not nodes._chains_allowed({"free_text": "스타벅스 빼줘"})  # 예전에는 이름만 있으면 체인을 허용했다
+    p = {"name": "스타벅스 서울숲역", "category": "카페", "must": True}
+    assert nodes._place_origin(p, {"free_text": "스타벅스 빼줘"}, None) != "사용자 지정"
