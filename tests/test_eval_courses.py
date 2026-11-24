@@ -355,3 +355,59 @@ def test_trace_is_saved_as_short_steps_and_old_results_still_work(tmp_path):
     assert "| seongsu_walk |" in ev.summarize(ev.expand_paths([str(tmp_path / "*.json")]))
     assert "seongsu_walk" in ev.render_compare({"seongsu_walk": old}, {"seongsu_walk": m})
     assert ev.trace_of(_resp(places)) == []  # trace 가 빈 응답
+
+
+# ---------- 묶음 3 지표: 해 진 뒤 야외 · 입장 마감 후 도착 · 늦은 점심 · 비 규칙 · 식당 직전 장거리 · 웹 건수 ----------
+
+
+def _resp_day(places, legs, start="11:00", end="20:00", transport="car", sunset="17:12", rain=False, pop=0.2, web=7):
+    from odiro.api.schemas import IntroOut, LegOut
+
+    r = CourseResponse(course_id="c", request=CourseRequest(region="가평", date="2026-11-28", start_time=start, end_time=end, transport=transport),
+                       places=[], legs=[], answer_md="")
+    r.places = [PlaceOut(order=i + 1, day=1, name=n, category=c, lat=37.5 + i * 0.01, lng=127.0, kakao_place_id=str(i), arrive=a, stay_min=s,
+                         intro=IntroOut(use_time=u) if u else None) for i, (n, c, a, s, u) in enumerate(places)]
+    r.legs = [LegOut(from_idx=i, to_idx=i + 1, transport=transport, duration_min=d, distance_m=1000) for i, d in enumerate(legs)]
+    r.meta.sun.sunset = sunset
+    r.meta.weather.rain, r.meta.weather.pop, r.meta.web_docs = rain, pop, web
+    return r
+
+
+CP = "[하절기(4월~10월)] - 09:00~19:00 (입장 마감 18:00)[동절기(11월~3월)] - 09:00~18:00 (입장 마감 17:00)"
+
+
+def test_time_of_day_metrics_from_response():
+    places = [("설미재미술관", "관광지", "11:00", 120, ""), ("카페드모파상", "카페", "13:23", 60, ""), ("산이좋은사람들", "식당", "15:01", 90, ""),
+              ("청평자연휴양림", "관광지", "17:06", 120, CP), ("남산전망대", "관광지", "19:30", 30, ""), ("숙소", "숙소", "20:10", 0, "")]
+    m = ev.evaluate(_resp_day(places, [23, 38, 35, 10, 40], rain=True, pop=0.6), CENTER, 100_000)
+    t = m["time_of_day"]
+    assert t["dark_outdoor"] == 1  # 휴양림 (전망대는 밤에 가는 곳이라 제외)
+    assert t["after_entry"] == 1 and t["entry_judged"] == 1  # 입장 마감 17:00 뒤 도착
+    assert t["late_lunch_days"] == ["1"]  # 11:00 출발, 첫 식당 15:01
+    assert t["rain_rule"] is True and t["pop"] == 0.6
+    assert t["long_pre_meal_legs"] == 1  # 카페→식당 38분 (자차 30분 초과)
+    assert t["web_docs"] == 7
+    row = ev.render_table({"gapyeong": m}).splitlines()[2]
+    assert row.endswith("| 1 | 1/1 | 1일 | 발동(60%) | 1 | 7 |")
+
+
+def test_time_of_day_walk_limit_and_no_rain():
+    places = [("볼", "관광지", "11:00", 60, ""), ("점심", "식당", "12:25", 60, "")]
+    m = ev.evaluate(_resp_day(places, [25], transport="walk", rain=False, pop=0.4, web=0), CENTER, 100_000)
+    t = m["time_of_day"]
+    assert t["long_pre_meal_legs"] == 1 and t["late_lunch_days"] == [] and t["rain_rule"] is False and t["dark_outdoor"] == 0
+    assert ev.render_table({"x": m}).splitlines()[2].endswith("| 0 | 0/0 | 0일 | -(40%) | 1 | 0 |")
+
+
+def test_time_of_day_old_results_compatible(tmp_path):
+    places = [("볼", "관광지", "11:00", 240, ""), ("점심", "식당", "15:21", 60, "")]
+    new = ev.evaluate(_resp_day(places, [5]), CENTER, 100_000)
+    old = {k: v for k, v in new.items() if k != "time_of_day"}  # 옛 결과 파일: 새 지표 없음 (일정 원자료로 늦은 점심만 계산)
+    assert ev.time_metrics_of(old)["late_lunch_days"] == ["1"] and ev.time_metrics_of(old)["dark_outdoor"] is None
+    assert ev.render_table({"x": old}).splitlines()[2].endswith("| - | - | 1일 | - | - | - |")
+    (tmp_path / "a.json").write_text(json.dumps({"date": "2026-11-28", "results": {"gapyeong_preset": old}}), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps({"date": "2026-11-28", "results": {"gapyeong_preset": new}}), encoding="utf-8")
+    table = ev.summarize(ev.expand_paths([str(tmp_path / "*.json")]))
+    assert "해 진 뒤 야외" in table and "| gapyeong_preset |" in table
+    cmp = ev.render_compare({"gapyeong_preset": old}, {"gapyeong_preset": new})
+    assert "늦은 점심" in cmp.splitlines()[0] and "| gapyeong_preset |" in cmp
