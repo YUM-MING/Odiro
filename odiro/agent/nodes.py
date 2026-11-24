@@ -2273,6 +2273,9 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
     prev_stay: dict[str, Any] | None = None  # 둘째 날부터는 전날 숙소에서 출발하는 동선으로 순서를 잡는다
     # 수정 흐름(장소 하나 바꾸기·시작 시각 변경)에서는 사용자가 이미 본 순서를 다시 짜거나 장소를 덧붙이지 않는다 (M1·M3·M4)
     editing = bool(state.get("instruction"))
+    # V1: 카드의 '바꾸기'(장소 하나 교체: run_edit 가 target_index 를 채운 경우)는 새 장소를 원래 자리에 두고 나머지 순서도 그대로.
+    # 자유 문장·빠른 수정(target_index 없음)과 전체 재구성은 대상이 아니다 (기존 동작)
+    card_swap = editing and state.get("target_index") is not None and not state.get("full_redraft")
     notes: list[str] = []
     added_dinners: list[dict[str, Any]] = []  # M4 로 덧붙인 식당 (다른 날 같은 가게를 또 넣지 않게)
     fillers: list[dict[str, Any]] = []  # C3 로 넣은 예비 장소
@@ -2284,11 +2287,18 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
     except ValueError:
         visit_month = datetime.now().month
     for day in sorted(by_day):
-        ordered = _best_order(by_day[day], start=prev_stay)
+        # 카드의 바꾸기: 사용자가 본 순서 그대로 (숙소는 이미 끝). 거리순 재정렬·시간대 틀을 쓰지 않고, 역할이 바뀌어 생기는
+        # 시간대 문제(예: 식당 연속)는 기존 경고 규칙에 맡긴다. 구간·도착 시각·종료 초과 처리는 아래 기존 흐름 그대로
+        ordered = (
+            [p for p in by_day[day] if p.get("category") != "숙소"] + [p for p in by_day[day] if p.get("category") == "숙소"]
+            if card_swap else _best_order(by_day[day], start=prev_stay)
+        )
         # 거리만 보고 순서를 잡으면 식당 → 식당 처럼 식사가 붙을 수 있다 → 시간대 틀(볼거리 → 점심 → 카페 → … → 저녁)로 다시 줄 세운다
         body = [p for p in ordered if p.get("category") != "숙소"]
         stays = [p for p in ordered if p.get("category") == "숙소"]
-        if len(body) >= 3 and any(a.get("category") == b.get("category") == "식당" for a, b in itertools.pairwise(body)):
+        if card_swap:
+            notes.append(f"Day {day} 바꾸기: 원래 순서 유지")
+        elif len(body) >= 3 and any(a.get("category") == b.get("category") == "식당" for a, b in itertools.pairwise(body)):
             ordered = _day_sequence(body) + stays
         elif (
             len(body) >= 3 and sum(p.get("category") == "식당" for p in body) >= 2
@@ -2744,8 +2754,15 @@ def modify(state: dict[str, Any]) -> dict[str, Any]:
         }
     idx = target if target is not None else plan.target_number - 1
     if plan.place is None or idx < 0 or idx >= len(places):
+        # V3: 전체 재구성은 draft_course 가 다시 짜는데, 초안 프롬프트는 conditions 만 읽는다 → 이번 수정 요청을 구분해 덧붙인다.
+        # 원래 조건은 그대로 두고, 충돌하면 수정 요청을 우선하되 꼭 넣을 곳·안전 규칙·예산 상한은 풀지 않는다고 적는다 (프롬프트 반영만)
+        conditions = (
+            state.get("conditions", "")
+            + f"\n이번 수정 요청(기존 조건과 충돌하면 이 요청을 우선. 단 꼭 넣을 곳·안전 규칙·예산 상한은 그대로 지킴): {instruction}"
+        )
         return {
             **req_update,
+            "conditions": conditions,
             "candidates": [],
             "spares": [],
             "rejected": [p["name"] for p in places],

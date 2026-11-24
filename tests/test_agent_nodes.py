@@ -2088,3 +2088,93 @@ def test_chain_exclusion_request_is_not_user_specified():
     assert not nodes._chains_allowed({"free_text": "스타벅스 빼줘"})  # 예전에는 이름만 있으면 체인을 허용했다
     p = {"name": "스타벅스 서울숲역", "category": "카페", "must": True}
     assert nodes._place_origin(p, {"free_text": "스타벅스 빼줘"}, None) != "사용자 지정"
+
+
+# ---------- V1: 카드의 바꾸기는 새 장소를 원래 자리에 / V3: 전체 재구성에 수정 요청 반영 ----------
+
+
+def _seongsu_swapped():
+    # 성수동 재현: 3번 로우키커피를 바꾸기 → 천상가옥(동쪽으로 약 1.9km). 거리만 보면 맨 뒤로 가는 게 25% 넘게 짧다
+    return [_w("서울숲 은행나무길", "관광지", 37.5444, 127.0374, 90), _w("삼청동샤브", "식당", 37.5446, 127.0384),
+            _w("천상가옥", "카페", 37.5450, 127.0590), _w("스페셜땡스투", "카페", 37.5448, 127.0394),
+            _w("메이탄", "식당", 37.5450, 127.0404)]
+
+
+def test_v1_card_swap_keeps_new_place_in_original_slot(monkeypatch):
+    calls = _count_routes(monkeypatch)
+    out = _opt(_seongsu_swapped(), start="11:00", end="20:00", instruction="3번 장소(로우키커피)를 다른 곳으로 바꿔줘", target_index=2)
+    assert [p["name"] for p in out["places"]] == ["서울숲 은행나무길", "삼청동샤브", "천상가옥", "스페셜땡스투", "메이탄"]
+    assert [p["order"] for p in out["places"]] == [1, 2, 3, 4, 5]
+    assert [(lg["from_idx"], lg["to_idx"]) for lg in out["legs"]] == [(0, 1), (1, 2), (2, 3), (3, 4)]  # 지도 경로도 카드 순번대로
+    assert len(calls) == len(out["legs"])  # 경로 호출은 구간 수 그대로 (순서를 바꾸지 않으니 더 늘지 않는다)
+    # 자유 문장 수정(카드 지정 없음)은 기존 동작 그대로: 거리 기준 재정렬 가능
+    free = _opt(_seongsu_swapped(), start="11:00", end="20:00", instruction="좀 더 조용한 카페로 바꿔줘")
+    assert [p["name"] for p in free["places"]][-1] != "메이탄" or [p["name"] for p in free["places"]][2] != "천상가옥"
+
+
+def test_v1_card_swap_on_trip_day2_keeps_day_order(monkeypatch):
+    _route_by_distance(monkeypatch)
+    d1 = [_w("A1", "관광지", 37.55, 127.000, day=1), _w("A2", "식당", 37.55, 127.001, day=1), _w("A3", "카페", 37.55, 127.002, day=1),
+          _w("숙소", "숙소", 37.55, 127.003, 0, day=1)]
+    d2 = [_w(n, c, lat, lng, day=2) for n, c, lat, lng in (("B1", "관광지", 37.5444, 127.0374), ("B2", "식당", 37.5446, 127.0384),
+                                                         ("새카페", "카페", 37.5450, 127.0590), ("B4", "관광지", 37.5448, 127.0394))]
+    out = _opt(d1 + d2, start="11:00", end="20:00", request={"mode": "trip"}, instruction="Day 2 3번 장소를 바꿔줘", target_index=6)
+    assert [p["name"] for p in out["places"] if p["day"] == 2] == ["B1", "B2", "새카페", "B4"]
+    assert [p["name"] for p in out["places"] if p["day"] == 1] == ["A1", "A2", "A3", "숙소"]
+
+
+def test_v1_card_swap_with_role_change_keeps_order_and_overtime_rule(monkeypatch):
+    _route_by_distance(monkeypatch)
+    # 카페 자리에 식당이 와서 식당이 연달아도 순서를 바꾸지 않는다 (경고 규칙에 맡김)
+    day = [_w("볼", "관광지", 37.55, 127.000), _w("점심", "식당", 37.55, 127.001), _w("새식당", "식당", 37.55, 127.002), _w("카페", "카페", 37.55, 127.003)]
+    out = _opt(day, start="11:00", end="20:00", instruction="3번 장소를 바꿔줘", target_index=2)
+    assert [p["name"] for p in out["places"]] == ["볼", "점심", "새식당", "카페"]
+    # 종료 시각을 넘기면 기존 안전 규칙(마지막 장소부터 덜어냄)은 그대로
+    long = [{**p, "stay_min": 200} for p in day]
+    out = _opt(long, start="11:00", end="18:00", instruction="3번 장소를 바꿔줘", target_index=2)
+    assert len(out["places"]) < 4 and any("일정이 종료 시각" in w for w in out["warnings"])
+
+
+def test_v3_full_redraft_passes_instruction_to_draft_prompt(monkeypatch):
+    places = [_p("A", order=1), _p("B", "식당", order=2), _p("C", "카페", order=3)]
+    plan = nodes.EditPlan(target_number=0, place=None, note="코스를 새로 구성합니다")
+
+    class FakeLLM:
+        def with_structured_output(self, schema):
+            return self
+
+        def invoke(self, messages):
+            return plan
+
+    monkeypatch.setattr(nodes, "chat", lambda *a, **k: FakeLLM())
+    monkeypatch.setattr(nodes, "_extract_moods", lambda text: [])
+    state = {"request": {"region": "성수동", "mode": "outing", "budget": 50000}, "conditions": "지역: 성수동\n추가 조건(반드시 반영): 조용한 곳",
+             "places": places, "instruction": "예산을 30% 정도 낮춰서 가성비 좋은 곳으로 바꿔줘", "trace": [], "rag_docs": []}
+    out = nodes.modify(state)
+    assert out["full_redraft"] is True
+    cond = out["conditions"]
+    assert cond.startswith("지역: 성수동\n추가 조건(반드시 반영): 조용한 곳")  # 원래 조건 유지
+    assert "이번 수정 요청" in cond and "예산을 30% 정도 낮춰서" in cond and "우선" in cond
+    prompt = nodes._draft_prompt({**state, **out, "per_day": 3, "weather": {}, "sun_times": {}, "center": {}})
+    assert "이번 수정 요청" in prompt and "예산을 30% 정도 낮춰서" in prompt
+
+
+def test_v3_single_swap_does_not_touch_conditions(monkeypatch):
+    places = [_p("A", order=1), _p("B", "식당", order=2), _p("C", "카페", order=3)]
+    plan = nodes.EditPlan(target_number=3, place=nodes.DraftPlace(name="새카페", category="카페", reason="조용"), note="")
+
+    class FakeLLM:
+        def with_structured_output(self, schema):
+            return self
+
+        def invoke(self, messages):
+            return plan
+
+    monkeypatch.setattr(nodes, "chat", lambda *a, **k: FakeLLM())
+    monkeypatch.setattr(nodes, "_extract_moods", lambda text: [])
+    monkeypatch.setattr(nodes.search_place, "search", lambda *a, **k: [])
+    monkeypatch.setattr(nodes, "_find_attractions", lambda *a, **k: [])
+    state = {"request": {"region": "성수동", "mode": "outing", "transport": "walk"}, "conditions": "지역: 성수동",
+             "places": places, "instruction": "3번째를 조용한 카페로", "trace": [], "rag_docs": [], "target_index": 2}
+    out = nodes.modify(state)
+    assert "conditions" not in out and not out.get("full_redraft")
