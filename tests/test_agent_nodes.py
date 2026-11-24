@@ -1183,6 +1183,7 @@ _PRESET_POOL = [_food_poi("청평한식당", 37.7400, 127.4000)]  # 동선 중�
 
 
 def test_c2_dinner_decided_from_real_legs_not_straight_line_estimate(monkeypatch):
+    monkeypatch.setattr(nodes, "LATE_LUNCH_START_MAX", "00:00")  # C2(저녁 판단)만 본다: 늦은 점심(L1)은 끈다
     _count_routes(monkeypatch, factor=0.6)  # 시골 장거리: 실제가 어림의 약 60%
     out = _opt(_preset_d1(), start="11:00", end="20:00", transport="car", poi_docs=[], dinner_pool=_PRESET_POOL)
     ps = out["places"]
@@ -1193,6 +1194,7 @@ def test_c2_dinner_decided_from_real_legs_not_straight_line_estimate(monkeypatch
 
 
 def test_c2_real_legs_past_end_time_revert_only_the_added_dinner(monkeypatch):
+    monkeypatch.setattr(nodes, "LATE_LUNCH_START_MAX", "00:00")  # C2(저녁 판단)만 본다: 늦은 점심(L1)은 끈다
     _count_routes(monkeypatch, factor=0.6, slow_to=(37.7400, 127.4000, 150))  # 새 식당으로 가는 실제 구간만 150분
     out = _opt(_preset_d1(), start="11:00", end="20:00", transport="car", poi_docs=[], dinner_pool=_PRESET_POOL)
     assert [p["name"] for p in out["places"]] == ["설미재미술관", "카페드모파상", "청평자연휴양림", "산이좋은사람들", "켄싱턴리조트 가평"]
@@ -1200,6 +1202,7 @@ def test_c2_real_legs_past_end_time_revert_only_the_added_dinner(monkeypatch):
 
 
 def test_c2_route_calls_stay_within_allowance(monkeypatch):
+    monkeypatch.setattr(nodes, "LATE_LUNCH_START_MAX", "00:00")  # C2(저녁 판단)만 본다: 늦은 점심(L1)은 끈다
     # 덧붙이는 날(숙소 있음): 최종 구간 수 + 1 (버려지는 '마지막 장소 → 숙소' 구간)
     calls = _count_routes(monkeypatch, factor=0.6)
     out = _opt(_preset_d1(), start="11:00", end="20:00", transport="car", poi_docs=[], dinner_pool=_PRESET_POOL)
@@ -1445,6 +1448,7 @@ def _preset_d1_after_c():
 
 def test_d1_car_dinner_candidate_within_8km_of_last_place(monkeypatch):
     _count_routes(monkeypatch, factor=0.6)
+    monkeypatch.setattr(nodes, "LATE_LUNCH_START_MAX", "00:00")  # 이 테스트는 D1(저녁 후보 반경)만 본다: 늦은 점심(L1)은 끈다
     gwigok = _food_poi("귀곡산장", 37.76117, 127.49337, full="음식점 > 한식")  # 동선 중심 8,999m · 마지막 장소 7,093m
     out = _opt(_preset_d1_after_c(), start="11:00", end="20:00", transport="car", poi_docs=[], dinner_pool=[gwigok])
     names = [p["name"] for p in out["places"]]
@@ -1766,3 +1770,130 @@ def test_f5_attraction_reason_uses_description_alone():
     assert nodes._attraction_reason(kakao) == "이 지역에서 들러 볼 만한 곳 (박물관)"
     assert nodes._attraction_reason({**kakao, "one_line": ""}) == "이 지역에서 들러 볼 만한 곳"
     assert "들러 볼 만한 곳 (" not in nodes._attraction_reason(doc)  # 대체 문구와 설명이 괄호로 겹치지 않는다
+
+
+# ---------- 묶음 3: S1 해 진 뒤·입장 마감 후 야외 · L1 늦은 점심 ----------
+
+_CP_USE = "[하절기(4월~10월)] - 09:00~19:00 (입장 마감 18:00)[동절기(11월~3월)] - 09:00~18:00 (입장 마감 17:00)※ 자세한 정보는 전화 문의 요망"
+
+
+def _intro(monkeypatch, table):
+    monkeypatch.setattr(nodes.tour_intro, "find_intro", lambda name, lat, lng: ({"use_time": table[name]} if name in table else None))
+
+
+def _gp_d1_deployed():
+    # 배포 사이트 가평 D1 (11/28, 일몰 17:12): 설미재 → 카페드모파상 → 산이좋은사람들(점심 15:01) → 청평자연휴양림 17:06 → 숙소
+    return [_w("설미재미술관", "관광지", 37.66090, 127.48222, 120), _w("카페드모파상", "카페", 37.70125, 127.39613),
+            _w("산이좋은사람들", "식당", 37.86616, 127.34932, 90), _w("청평자연휴양림", "관광지", 37.71180, 127.40724, 120),
+            _w("켄싱턴리조트 가평", "숙소", 37.75972, 127.39560, 120)]
+
+
+def _gp_opt(places, **kw):
+    req = {"date": "2026-11-28", "mode": "trip"}
+    return _opt(places, start="11:00", end="20:00", transport="car", sun_times={"sunset": "17:12"}, request=req, **kw)
+
+
+def test_s1_l1_gapyeong_d1_lunch_before_1330_and_forest_before_entry_close(monkeypatch):
+    _route_by_distance(monkeypatch)
+    _intro(monkeypatch, {"청평자연휴양림": _CP_USE})
+    out = _gp_opt(_gp_d1_deployed())
+    ps = {p["name"]: p for p in out["places"]}
+    lunch = nodes._hhmm_to_min(ps["산이좋은사람들"]["arrive"])
+    forest = nodes._hhmm_to_min(ps["청평자연휴양림"]["arrive"])
+    assert nodes._hhmm_to_min("11:00") <= lunch <= nodes._hhmm_to_min("13:30")  # L1
+    assert forest <= nodes._hhmm_to_min("17:00")  # 동절기 입장 마감 17:00 전 도착 (S1)
+    assert forest + ps["청평자연휴양림"]["stay_min"] <= nodes._hhmm_to_min("17:42")  # 일몰 + 30분 안에 끝
+    assert out["places"][-1]["category"] == "숙소" and len(out["legs"]) == len(out["places"]) - 1
+    assert not any("해가 진 뒤" in w or "입장 마감" in w for w in out["warnings"])
+    dbg = out["trace"][-1]["debug"]
+    assert "Day 1 늦은 점심:" in dbg and "Day 1 일몰·이용시간:" in dbg
+    assert "일몰" not in out["trace"][-1]["detail"]  # 판단 기록은 debug 에만
+
+
+def test_s1_keeps_night_spots_and_outdoor_ending_before_sunset(monkeypatch):
+    _route_by_distance(monkeypatch)
+    _intro(monkeypatch, {})
+    day = [_w("미술관", "관광지", 37.55, 127.000, 120), _w("점심", "식당", 37.55, 127.001), _w("카페", "카페", 37.55, 127.002, 120),
+           _w("남산전망대", "관광지", 37.55, 127.003, 120), _w("한강공원", "관광지", 37.55, 127.004, 60, indoor=False)]
+    out = _opt(day, start="11:00", end="21:00", sun_times={"sunset": "17:12"}, request={"date": "2026-11-28"})
+    names = [p["name"] for p in out["places"]]
+    assert names.index("남산전망대") > names.index("카페")  # 전망대(야경)는 해 진 뒤여도 그대로
+    early = [_w("한강공원", "관광지", 37.55, 127.000, 60, indoor=False), _w("점심", "식당", 37.55, 127.001), _w("카페", "카페", 37.55, 127.002)]
+    out = _opt(early, start="11:00", end="18:00", sun_times={"sunset": "17:12"}, request={"date": "2026-11-28"})
+    assert [p["name"] for p in out["places"]] == ["한강공원", "점심", "카페"]  # 일몰 전에 끝나는 야외는 그대로
+
+
+def test_s1_open_hours_parsing():
+    oh = nodes._open_hours
+    assert oh(_CP_USE, 11) == (540, 1080, 1020)  # 동절기 09:00~18:00, 입장 마감 17:00
+    assert oh(_CP_USE, 7) == (540, 1140, 1080)  # 하절기
+    gbg = "[1월~2월/11월~12월]09:00~17:00 (입장마감 16:00)[3월~5월/9월~10월]09:00~18:00 (입장마감 17:00)[6월~8월] 09:00~18:30 (입장마감 17:30)"
+    assert oh(gbg, 11) == (540, 1020, 960) and oh(gbg, 6) == (540, 1110, 1050)
+    assert oh("08:30~19:00 (입장 마감 18:00)", 11) == (510, 1140, 1080)
+    assert oh("08:00-21:00※ 선박운항 및 자세한 사항은 홈페이지 참조", 11) == (480, 1260, None)
+    # 애매한 문장은 판정하지 않는다
+    for text in ("상시 개방", "- 평일 06:00~21:00- 주말/공휴일 06:00~18:00", "08:00~18:00 (휴게시간 12:00~14:00)", "14:00~익일 11:00",
+                 "[영업시간]11:00~19:00[투어시간]11:00 / 15:00 / 17:00", "공연별로 상이함", "15:00", "", None):
+        assert oh(text, 11) is None, text
+    assert oh("[하절기(4월~10월)] 09:00~19:00", 11) is None  # 방문 달이 어느 계절에도 없음
+
+
+def test_s1_warns_when_it_cannot_be_moved_or_replaced(monkeypatch):
+    _route_by_distance(monkeypatch)
+    _intro(monkeypatch, {})
+    # 16:30 출발 → 어디에 두어도 해 진 뒤 (옮길 자리·예비 없음) → 경고 한 줄
+    day = [_w("점심", "식당", 37.55, 127.000), _w("수목원", "관광지", 37.55, 127.001, 120)]
+    out = _opt(day, start="16:30", end="21:00", sun_times={"sunset": "17:12"}, request={"date": "2026-11-28"})
+    assert any(w == "수목원은 해가 진 뒤라 일찍 방문하는 걸 추천해요" for w in out["warnings"])
+    assert "Day 1 일몰·이용시간: 미해결(수목원 해 진 뒤)" in out["trace"][-1]["debug"]
+    # 실내 예비 장소가 있으면 바꾼다
+    out = _opt(day, start="16:30", end="21:00", sun_times={"sunset": "17:12"}, request={"date": "2026-11-28"},
+               spares=[_spare("작은미술관", "관광지", 37.55, 127.0015, 120)])
+    assert "작은미술관" in [p["name"] for p in out["places"]] and "수목원" not in [p["name"] for p in out["places"]]
+    assert not any("해가 진 뒤" in w for w in out["warnings"])
+
+
+def test_s1_l1_conflict_priority_and_no_loop(monkeypatch):
+    _route_by_distance(monkeypatch)
+    _intro(monkeypatch, {"계곡": "09:00~17:00 (입장 마감 16:00)"})
+    # 12:00 출발: 점심을 13:30 전에 두면 계곡이 입장 마감(16:00)을 넘고, 계곡을 앞에 두면 점심이 13:30 을 넘는다
+    # 계곡 체류 300분: 폐장 17:00 전에 끝내려면 12:00 에 들어가야 하고, 그러면 점심은 17시 이후 → 둘 다는 불가
+    day = [_w("긴박물관", "관광지", 37.55, 127.000, 150), _w("점심", "식당", 37.55, 127.001), _w("계곡", "관광지", 37.55, 127.002, 300, indoor=False)]
+    out = _opt(day, start="12:00", end="21:00", sun_times={"sunset": "17:12"}, request={"date": "2026-11-28"})
+    ps = {p["name"]: p for p in out["places"]}
+    assert ps["계곡"]["arrive"] == "12:00"  # 이용 시간(입장 마감·폐장) > 늦은 점심
+    assert nodes._hhmm_to_min(ps["점심"]["arrive"]) > nodes._hhmm_to_min("13:30")
+    dbg = out["trace"][-1]["debug"]
+    assert "Day 1 늦은 점심: 미해결" in dbg and not any("계곡" in w for w in out["warnings"])
+
+
+def test_l1_late_lunch_pulled_forward(monkeypatch):
+    _route_by_distance(monkeypatch)
+    _intro(monkeypatch, {})
+    # 성수동형 (뚜벅이 11:00): 첫 식당(채선당) 15:21 → 13:30 전으로
+    day = [_w("볼1", "관광지", 37.5444, 127.0374, 120), _w("카페1", "카페", 37.5446, 127.0384, 90), _w("볼2", "관광지", 37.5448, 127.0394, 90),
+           _w("채선당", "식당", 37.5450, 127.0404), _w("카페2", "카페", 37.5452, 127.0414)]
+    out = _opt(day, start="11:00", end="20:00", sun_times={"sunset": "17:12"}, request={"date": "2026-11-28"})
+    lunch = next(p for p in out["places"] if p["name"] == "채선당")
+    assert nodes._hhmm_to_min("11:00") <= nodes._hhmm_to_min(lunch["arrive"]) <= nodes._hhmm_to_min("13:30")
+    # 13:30 전에 이미 점심이면 그대로
+    ok = [_w("볼1", "관광지", 37.5444, 127.0374, 60), _w("채선당", "식당", 37.5450, 127.0404), _w("카페2", "카페", 37.5452, 127.0414)]
+    assert [p["name"] for p in _opt(ok, start="11:00", end="20:00")["places"]] == ["볼1", "채선당", "카페2"]
+    # fixed_order 날에도 적용, 수정 흐름에는 미적용
+    fixed = [{**p, "fixed_order": True} for p in day]
+    out = _opt(fixed, start="11:00", end="20:00")
+    assert nodes._hhmm_to_min(next(p for p in out["places"] if p["name"] == "채선당")["arrive"]) <= nodes._hhmm_to_min("13:30")
+    out = _opt([dict(p) for p in day], start="11:00", end="20:00", instruction="3번째를 바꿔줘")
+    assert [p["name"] for p in out["places"]] == [p["name"] for p in day]
+
+
+def test_l1_does_not_change_early_start_m3_days(monkeypatch):
+    _route_by_distance(monkeypatch)
+    out = _opt(_gn_d1_draft(), start="09:00", end="20:00", transport="car")  # 기존 D2 테스트와 같은 결과 (M3 두 곳)
+    assert [p["name"] for p in out["places"]][:4] == ["경포대", "경포호", "금학칼국수분식", "346커피스토리"]
+
+
+@pytest.fixture(autouse=True)
+def _no_local_intro_file(monkeypatch):
+    """optimize_route 의 S1 이 로컬 data/tour_intro.json 을 읽지 않게 (테스트가 데이터 파일에 따라 달라지지 않도록). _intro() 로 덮어쓴다."""
+    monkeypatch.setattr(nodes.tour_intro, "find_intro", lambda name, lat, lng: None)

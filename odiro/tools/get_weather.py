@@ -1,7 +1,9 @@
 """get_weather Tool — OpenWeather 5일/3시간 예보 → 해당 날짜 낮 시간대 요약 + 강수확률.
 
 - 예보 범위(약 5일) 밖이면 available=False, 코스는 평소대로 짠다.
-- rain=True 기준: 강수확률 ≥ 0.5 또는 주요 날씨가 비/눈. → draft 단계에서 실내 가중치, 답변에 안내.
+- rain=True(실내 위주로 바꿈) 기준: 코스 시간대 3시간 예보 중 강수확률 ≥ 0.5 이거나, 3시간 강수(눈) 예보량 ≥ 1.0mm.
+  예전에는 '실 비' 같은 약한 비가 한 칸이라도 있으면 강수확률 20% 여도 켜졌다 → 확률·양으로만 본다 (묶음 3 R1).
+- umbrella=True(코스는 그대로, 우산 안내만): rain 이 아니고 강수확률 ≥ 0.3.
 응답은 3시간 캐시.
 """
 
@@ -19,7 +21,9 @@ from odiro.tools._util import cached, http
 
 FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 CACHE_TTL = 3 * 3600
-RAIN_POP = 0.5
+RAIN_POP = 0.5  # 이 이상이면 실내 위주
+RAIN_MM_3H = 1.0  # 3시간 강수(눈) 예보량이 이 이상이면 확률과 무관하게 실내 위주 (약한 비 0.1~0.5mm 는 제외)
+UMBRELLA_POP = 0.3  # 30~49%: 코스는 그대로, 우산 안내만
 
 
 def _fetch(lat: float, lng: float) -> list[dict[str, Any]]:
@@ -57,10 +61,10 @@ def weather(lat: float, lng: float, date: str, start_hour: int = 10, end_hour: i
 
     pops = [float(it.get("pop", 0)) for it in day_items]
     temps = [float(it["main"]["temp"]) for it in day_items]
-    mains = [it["weather"][0]["main"] for it in day_items]
     descs = [it["weather"][0]["description"] for it in day_items]
     max_pop = max(pops)
-    wet = any(m in ("Rain", "Snow", "Thunderstorm", "Drizzle") for m in mains)
+    max_mm = max(float((it.get("rain") or {}).get("3h", 0)) + float((it.get("snow") or {}).get("3h", 0)) for it in day_items)
+    rain = max_pop >= RAIN_POP or max_mm >= RAIN_MM_3H
     # 가장 흔한 설명을 대표로
     summary = max(set(descs), key=descs.count)
     return {
@@ -70,7 +74,9 @@ def weather(lat: float, lng: float, date: str, start_hour: int = 10, end_hour: i
         "temp_min": round(min(temps), 1),
         "temp_max": round(max(temps), 1),
         "pop": round(max_pop, 2),
-        "rain": bool(wet or max_pop >= RAIN_POP),
+        "rain_mm_3h": round(max_mm, 1),
+        "rain": bool(rain),
+        "umbrella": bool(not rain and max_pop >= UMBRELLA_POP),
         "note": "",
     }
 

@@ -23,7 +23,14 @@ from pydantic import BaseModel, Field
 from odiro.agent.llm import chat
 from odiro.api.schemas import MOODS
 from odiro.config import settings
-from odiro.tools import get_route, get_sun_times, get_weather, search_place, summarize_reviews
+from odiro.tools import (
+    get_route,
+    get_sun_times,
+    get_weather,
+    search_place,
+    summarize_reviews,
+    tour_intro,
+)
 from odiro.tools import rag_search as rag
 from odiro.tools._util import estimate_minutes, haversine_m
 
@@ -356,7 +363,7 @@ def _max_outdoor(req: dict[str, Any]) -> int:
     return 2 if "자연/산책" in (req.get("moods") or []) else 1
 
 
-_OUTDOOR_NAME_RE = re.compile(r"(공원|수목원|호수|저수지|유원지|해변|해수욕장|산책로|둘레길|캠핑장|전망대|출렁다리|[가-힣]섬$|숲$|계곡|폭포)")
+_OUTDOOR_NAME_RE = re.compile(r"(공원|수목원|휴양림|호수|저수지|유원지|해변|해수욕장|산책로|둘레길|캠핑장|전망대|출렁다리|[가-힣]섬$|숲$|계곡|폭포)")
 
 
 def _is_outdoor(p: dict[str, Any]) -> bool:
@@ -840,8 +847,10 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
     n_backed = sum(1 for p in pois if p.get("blog_mentions"))
 
     warnings = list(state.get("warnings", []))
+    if weather.get("umbrella"):  # R1: 강수확률 30~49% 는 코스를 바꾸지 않고 우산 안내만
+        warnings.append(f"비 소식이 있어요(강수확률 {round((weather.get('pop') or 0) * 100)}%). 우산을 챙기세요")
     if weather.get("rain"):
-        warnings.append(f"비 예보(강수확률 {int((weather.get('pop') or 0) * 100)}%) → 실내 위주로 구성했어요")
+        warnings.append(f"비 예보(강수확률 {round((weather.get('pop') or 0) * 100)}%) → 실내 위주로 구성했어요")
         # 분위기 태그가 야외 쪽(자연/산책 등)이면 실내 후보가 거의 안 잡히므로 실내 문서를 따로 더 뽑는다
         try:
             seen = {d["doc_id"] for d in rag_docs}
@@ -866,7 +875,8 @@ def retrieve(state: dict[str, Any]) -> dict[str, Any]:
         "weather": weather,
         "sun_times": sun,
         "warnings": warnings,
-        "trace": state["trace"] + [{"node": "retrieve", "status": "done", "ms": _now_ms() - t0, "detail": detail}],
+        "trace": state["trace"] + [{"node": "retrieve", "status": "done", "ms": _now_ms() - t0, "detail": detail,
+                                    "debug": summarize_reviews.pause_status()}],  # T1-b: Tavily 멈춤 상태 (코드·분류만)
     }
 
 
@@ -1703,6 +1713,196 @@ def _lunch_not_too_early(
     return body + stays
 
 
+# ---------- 묶음 3: S1 해 진 뒤·입장 마감 후 야외, L1 늦은 점심 ----------
+SUNSET_GRACE_MIN = 30  # S1: 낮 야외 장소 체류가 일몰 + 이만큼을 넘겨 끝나면 '해 진 뒤'
+LATE_LUNCH_START_MAX = "12:00"  # L1: 출발이 이 시각 이하인 날만
+LATE_LUNCH_AFTER = "13:30"  # L1: 첫 식당 어림 도착이 이보다 늦으면 앞으로 당긴다
+TIME_FIT_MAX_ROUNDS = 2  # L1·S1 재조정 최대 횟수 (매번 점수가 엄격히 좋아질 때만 바꾸므로 반복은 원래 유한하고, 상한은 안전장치)
+_NIGHT_SPOT_RE = re.compile(r"(전망대|야경|야시장|타워|스카이|루프탑|노을|일몰|야간|별빛|천문대)")  # 해 진 뒤 가도 되는 곳
+
+# 이용시간 파싱 (TourAPI detailIntro2 use_time 원문). 확실히 읽히는 형태만 읽고, 하나라도 애매하면 None
+_HOURS_AMBIGUOUS = re.compile(r"평일|주말|공휴일|[월화수목금토일]요일|휴게|상이|프로그램|공연|입실|퇴실|익일|투어|시설별|점포|매주|격주|사전|예약")
+_HOURS_RANGE = re.compile(r"(\d{1,2}):(\d{2})\s*[~\-–～]\s*(\d{1,2}):(\d{2})")
+_HOURS_ENTRY = re.compile(r"(?:입장|매표|발권)\s*마감\s*(\d{1,2}):(\d{2})")
+_HOURS_LABEL = re.compile(r"\[([^\]]*)\]")
+_HOURS_MONTHS = re.compile(r"(\d{1,2})월\s*~\s*(\d{1,2})월")
+
+
+def _label_months(label: str) -> set[int]:
+    """'하절기(4월~10월)', '1월~2월/11월~12월', '6월~8월' → 달 집합 (11월~2월 처럼 해를 넘기는 범위 포함)."""
+    months: set[int] = set()
+    for a, b in _HOURS_MONTHS.findall(label):
+        a, b = int(a), int(b)
+        months |= set(range(a, b + 1)) if a <= b else set(range(a, 13)) | set(range(1, b + 1))
+    for m in re.findall(r"(\d{1,2})월", _HOURS_MONTHS.sub("", label)):
+        months.add(int(m))
+    return {m for m in months if 1 <= m <= 12}
+
+
+def _open_hours(text: str | None, month: int) -> tuple[int, int, int | None] | None:
+    """이용시간 원문 → 방문 달 기준 (여는 시각, 닫는 시각, 입장 마감 또는 None), 분 단위. 확실하지 않으면 None.
+
+    읽는 것: 'HH:MM~HH:MM' 이 정확히 하나 (+ '입장 마감 HH:MM' 하나), 또는 [달 범위] 라벨로 나뉜 구간 중 방문 달이 든 구간 하나.
+    읽지 않는 것: 상시 개방·평일/주말·요일·휴게시간·시설별·익일·라벨이 달이 아닌 경우·시각 범위가 둘 이상인 구간 등."""
+    if not text or _HOURS_AMBIGUOUS.search(text):
+        return None
+    labels = list(_HOURS_LABEL.finditer(text))
+    body = text
+    if labels:
+        hits = []
+        for k, m in enumerate(labels):
+            months = _label_months(m.group(1))
+            if not months:
+                return None
+            if month in months:
+                hits.append(text[m.end(): labels[k + 1].start() if k + 1 < len(labels) else len(text)])
+        if len(hits) != 1:
+            return None
+        body = hits[0]
+    ranges = _HOURS_RANGE.findall(body)
+    entries = _HOURS_ENTRY.findall(body)
+    if len(ranges) != 1 or len(entries) > 1:
+        return None
+    oh, om, ch, cm = (int(x) for x in ranges[0])
+    o, c = oh * 60 + om, ch * 60 + cm
+    if c <= o:
+        return None
+    e = int(entries[0][0]) * 60 + int(entries[0][1]) if entries else None
+    if e is not None and not o < e <= c:
+        return None
+    return o, c, e
+
+
+def _daytime_outdoor(p: dict[str, Any]) -> bool:
+    """낮에만 의미 있는 야외 장소 (비 예보 규칙의 야외 판정 재사용). 전망대·야경·야시장 등 밤에 가는 곳은 제외."""
+    return _is_outdoor(p) and not _NIGHT_SPOT_RE.search(p.get("name", ""))
+
+
+def _josa(word: str, with_final: str, without: str) -> str:
+    """받침 유무로 조사 고르기 (예: 수목원은 / 휴양림은 / 카페는)."""
+    last = word[-1] if word else ""
+    return with_final if "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 else without
+
+
+def _time_fit(
+    body: list[dict[str, Any]], start_min: int, transport: str, sunset: int | None, hours: dict[int, Any], late_rule: bool, early_rule: bool,
+) -> tuple[tuple[int, int, int], list[tuple[dict[str, Any], str]]]:
+    """직선 어림 도착 시각으로 본 그날 순서의 점수 (작을수록 좋음): (이용시간 위반 수, 해 진 뒤 수, 점심 시각 위반 0/1)과 위반 목록.
+    우선순위가 점수 순서 그대로다: 입장 마감·폐장(들어갈 수 없음) > 일몰 > 늦은(또는 이른) 점심."""
+    arr = _est_arrivals(body, start_min, transport)
+    entry = dark = 0
+    issues: list[tuple[dict[str, Any], str]] = []
+    for p, a in zip(body, arr, strict=True):
+        if not _daytime_outdoor(p):
+            continue
+        end = a + int(p.get("stay_min", 60))
+        h = hours.get(id(p))
+        if h and ((h[2] is not None and a > h[2]) or a >= h[1] or end > h[1]):
+            entry += 1
+            issues.append((p, f"입장 마감({_min_to_hhmm(h[2] if h[2] is not None else h[1])})"))
+        elif sunset is not None and end > sunset + SUNSET_GRACE_MIN:
+            dark += 1
+            issues.append((p, "해 진 뒤"))
+    first = next((i for i, p in enumerate(body) if p.get("category") == "식당"), None)
+    lunch = 0
+    if first is not None:
+        t = arr[first]
+        lunch = int((late_rule and t > _hhmm_to_min(LATE_LUNCH_AFTER)) or (early_rule and t < _hhmm_to_min(FIRST_MEAL_NOT_BEFORE)))
+    return (entry, dark, lunch), issues
+
+
+def _fit_time_of_day(
+    ordered: list[dict[str, Any]], start_min: int, transport: str, sunset: int | None, month: int, state: dict[str, Any], day: int,
+    taken: list[dict[str, Any]], why: list[str],
+) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], str]]]:
+    """L1(늦은 점심) → S1(해 진 뒤·입장 마감 후 야외)을 같은 점수로 함께 맞춘다. 구간 계산 전, 직선 어림으로 순서만 바꾼다.
+
+    - L1: 출발 ≤ 12:00 인데 첫 식당 도착 > 13:30 이면 첫 식당을 앞의 볼거리·카페 앞으로 당긴다 (식당끼리 순서 유지).
+    - S1: 낮 야외 장소가 일몰 + 30분을 넘겨 끝나거나 입장 마감 뒤에 닿으면(이용 정보를 읽을 수 있을 때) 더 이른 자리로 옮긴다.
+    - 매번 점수(이용시간 위반, 해 진 뒤, 점심 시각)가 엄격히 좋아질 때만 바꾸고 최대 2회 돌린다 → 서로 되돌리는 반복이 없다.
+    - 그래도 남은 S1 문제는 같은 날의 실내 예비 장소로 바꿀 수 있으면 바꾼다 (꼭 넣을 곳은 바꾸지 않음).
+    숙소는 끝에 그대로, 장소 추가·삭제 없음(교체 제외). why 에 날 단위 기록을 덧붙이고, (순서, 남은 문제) 를 돌려준다."""
+    body = [p for p in ordered if p.get("category") != "숙소"]
+    stays = [p for p in ordered if p.get("category") == "숙소"]
+    req = state["request"]
+    late_rule = start_min <= _hhmm_to_min(LATE_LUNCH_START_MAX)
+    early_rule = start_min <= _hhmm_to_min(LUNCH_RULE_START_MAX)
+    hours: dict[int, Any] = {}
+
+    def read_hours(ps: list[dict[str, Any]]) -> None:
+        for p in ps:
+            if id(p) not in hours and _daytime_outdoor(p):
+                info = tour_intro.find_intro(p["name"], p["lat"], p["lng"]) or {}
+                hours[id(p)] = _open_hours(info.get("use_time"), month)
+
+    read_hours(body)
+
+    def score(b: list[dict[str, Any]]) -> tuple[tuple[int, int, int], list[tuple[dict[str, Any], str]]]:
+        return _time_fit(b, start_min, transport, sunset, hours, late_rule, early_rule)
+
+    def best_move(b: list[dict[str, Any]], i: int) -> list[dict[str, Any]] | None:
+        """b[i] 를 더 이른 자리 j(< i)로 옮긴 순서 중 점수가 가장 좋은 것 (같으면 덜 움직인 것). 지금보다 좋아지지 않으면 None."""
+        cur = score(b)[0]
+        best: tuple[tuple[int, int, int], int, list[dict[str, Any]]] | None = None
+        for j in range(i - 1, -1, -1):
+            trial = list(b)
+            trial.insert(j, trial.pop(i))
+            sc = score(trial)[0]
+            if sc < cur and (best is None or sc < best[0]):
+                best = (sc, i - j, trial)
+        return best[2] if best else None
+
+    moved_l1 = moved_s1 = 0
+    for _ in range(TIME_FIT_MAX_ROUNDS):
+        changed = False
+        sc, issues = score(body)
+        first = next((i for i, p in enumerate(body) if p.get("category") == "식당"), None)
+        if sc[2] and late_rule and first:  # L1: 첫 식당을 앞으로
+            nb = best_move(body, first)
+            if nb is not None:
+                body, changed, moved_l1 = nb, True, moved_l1 + 1
+        for p, _why in score(body)[1]:  # S1: 문제 있는 야외 장소를 앞으로
+            i = next(k for k, q in enumerate(body) if q is p)
+            nb = best_move(body, i)
+            if nb is not None:
+                body, changed, moved_s1 = nb, True, moved_s1 + 1
+        if not changed:
+            break
+    sc, issues = score(body)
+    # 옮겨도 남은 S1 문제: 같은 날의 실내 예비 장소로 교체 (C3 와 같은 풀: verify 가 남긴 확인된 예비)
+    replaced = []
+    for p, _why in list(issues):
+        if p.get("must"):
+            continue
+        used = taken + body
+        pool = [
+            s for s in state.get("spares", [])
+            if s.get("verified") and s.get("lat") and s.get("lng") and s.get("day", day) == day and s.get("category") in PLAY_CATEGORIES
+            and not _is_outdoor(s) and not any(t.get("name") == s.get("name") or _same_shop(t, s) for t in used)
+            and not (req.get("transport", "walk") == "walk" and haversine_m(p["lat"], p["lng"], s["lat"], s["lng"]) > WALK_OUTLIER_M)
+        ]
+        for s in sorted(pool, key=lambda x: haversine_m(p["lat"], p["lng"], x["lat"], x["lng"])):
+            trial = [{**s, "day": day} if q is p else q for q in body]
+            read_hours(trial)
+            if score(trial)[0] < sc:
+                body = trial
+                sc, issues = score(body)
+                replaced.append(f"{p['name']}→{s['name']}")
+                break
+    lunch_note = "해당 없음" if not late_rule else ("미해결" if sc[2] and late_rule else (f"{moved_l1}회 당김" if moved_l1 else "13:30 전"))
+    why.append(f"늦은 점심: {lunch_note}")
+    targets = [p for p in body if _daytime_outdoor(p)]
+    if not targets:
+        s1_note = "대상 없음"
+    else:
+        parts = ([f"{moved_s1}회 옮김"] if moved_s1 else []) + ([f"교체({', '.join(replaced)})"] if replaced else [])
+        if issues:
+            parts.append("미해결(" + ", ".join(f"{p['name']} {w}" for p, w in issues) + ")")
+        s1_note = "; ".join(parts) if parts else "문제 없음"
+    why.append(f"일몰·이용시간: {s1_note}")
+    return body + stays, issues
+
+
 def _stretch_before_lunch(ordered: list[dict[str, Any]], arrives: list[int], lunch_stay: dict[int, int]) -> str:
     """E1: 첫 식당 실제 도착이 11:00 전이면 바로 앞에 이어진 볼거리·카페(식당·숙소 제외) 체류를 가까운 것부터 장소당 최대 +30분.
     순서·구간은 그대로. lunch_stay(id(장소) → 늘린 뒤 체류)를 채우고 trace 한 줄을 돌려준다 (늘린 분 수는 '+N분' 으로 시작)."""
@@ -1979,6 +2179,12 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
     added_dinners: list[dict[str, Any]] = []  # M4 로 덧붙인 식당 (다른 날 같은 가게를 또 넣지 않게)
     fillers: list[dict[str, Any]] = []  # C3 로 넣은 예비 장소
     place_cap = MAX_PLACES_PER_DAY_TRIP if req.get("mode") == "trip" else MAX_PLACES_PER_DAY  # M4·C3 로 넣어도 넘지 않는 하루 장소 수 (숙소 제외)
+    sunset_hhmm = (state.get("sun_times") or {}).get("sunset") or ""
+    sunset_min = _hhmm_to_min(sunset_hhmm) if re.fullmatch(r"\d{1,2}:\d{2}", sunset_hhmm) else None  # S1 (없으면 일몰 판정 안 함)
+    try:
+        visit_month = datetime.strptime(req.get("date", ""), "%Y-%m-%d").month
+    except ValueError:
+        visit_month = datetime.now().month
     for day in sorted(by_day):
         ordered = _best_order(by_day[day], start=prev_stay)
         # 거리만 보고 순서를 잡으면 식당 → 식당 처럼 식사가 붙을 수 있다 → 시간대 틀(볼거리 → 점심 → 카페 → … → 저녁)로 다시 줄 세운다
@@ -2009,6 +2215,17 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
         else:
             ordered = _lunch_not_too_early(ordered, _hhmm_to_min(start_hhmm), transport, m3)  # M3
         notes.append(f"Day {day} 점심 순서: {m3[0]}")
+        # L1·S1: 늦은 점심·해 진 뒤/입장 마감 후 야외 (M3 다음, 구간 계산 전에 순서 확정). 처음 만드는 흐름에서만
+        if editing:
+            notes.append(f"Day {day} 늦은 점심: 수정 흐름")
+            notes.append(f"Day {day} 일몰·이용시간: 수정 흐름")
+        else:
+            fit_why: list[str] = []
+            ordered, _ = _fit_time_of_day(
+                ordered, _hhmm_to_min(start_hhmm), transport, sunset_min, visit_month, state, day,
+                list(state.get("verified", [])) + added_dinners + fillers, fit_why,
+            )
+            notes.extend(f"Day {day} {w}" for w in fit_why)
         prev_stay = next((p for p in ordered if p.get("category") == "숙소"), prev_stay)
         offset = len(places)
         route_cache: dict[tuple[int, int], dict[str, Any]] = {}
@@ -2153,6 +2370,19 @@ def optimize_route(state: dict[str, Any]) -> dict[str, Any]:
             warnings.append(f"Day {day} 일정이 종료 시각({end_hhmm})을 넘어 {', '.join(dropped)}을(를) 뺐어요")
         if body_end > limit:
             warnings.append(f"Day {day} 일정이 종료 시각({end_hhmm})을 넘겨요 ({_min_to_hhmm(body_end)} 끝). 체류 시간을 줄여보세요")
+        if not editing:  # S1 최종 확인: 실제 구간·연장·덧붙이기를 모두 반영한 도착 시각으로, 남은 문제만 경고 한 줄씩
+            eff_stay = {**stay_of, **lunch_stay}
+            for k, p in enumerate(ordered):
+                if not _daytime_outdoor(p):
+                    continue
+                a = arrives[k]
+                end = a + eff_stay.get(id(p), int(p.get("stay_min", 60)))
+                h = _open_hours((tour_intro.find_intro(p["name"], p["lat"], p["lng"]) or {}).get("use_time"), visit_month)
+                eun = _josa(p["name"], "은", "는")
+                if h and ((h[2] is not None and a > h[2]) or a >= h[1] or end > h[1]):
+                    warnings.append(f"{day_label}{p['name']}{eun} 입장 마감({_min_to_hhmm(h[2] if h[2] is not None else h[1])}) 뒤라 일찍 방문하는 걸 추천해요")
+                elif sunset_min is not None and end > sunset_min + SUNSET_GRACE_MIN:
+                    warnings.append(f"{day_label}{p['name']}{eun} 해가 진 뒤라 일찍 방문하는 걸 추천해요")
         for i, p in enumerate(ordered):
             eff = {**stay_of, **lunch_stay}
             stretched = {"stay_min": eff[id(p)]} if id(p) in eff else {}
@@ -2244,7 +2474,8 @@ def enrich(state: dict[str, Any]) -> dict[str, Any]:
     n_ok = sum(1 for p in places if p.get("review_summary"))
     return {
         "places": places,
-        "trace": state["trace"] + [{"node": "enrich", "status": "done", "ms": _now_ms() - t0, "detail": f"리뷰 요약 {n_ok}/{len(places)}"}],
+        "trace": state["trace"] + [{"node": "enrich", "status": "done", "ms": _now_ms() - t0, "detail": f"리뷰 요약 {n_ok}/{len(places)}",
+                                    "debug": summarize_reviews.pause_status()}],  # T1-b: Tavily 멈춤 상태 (코드·분류만)
     }
 
 

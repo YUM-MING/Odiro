@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -20,6 +23,45 @@ from odiro.tools._util import cached, http
 
 TAVILY_URL = "https://api.tavily.com/search"
 CACHE_TTL = 7 * 24 * 3600
+log = logging.getLogger(__name__)
+
+# ---------- T1-b: 크레딧 소진·인증 오류면 잠시 Tavily 호출을 멈춘다 ----------
+# 같은 프로세스에서 PAUSE_SEC 동안 네트워크 요청 없이 바로 빈 결과 (캐시에 있는 결과는 그대로 쓴다).
+# 401·403(인증), 432(플랜 한도)·433(종량제 한도)는 바로 멈춤. 429 는 본문에 크레딧·한도 표현만 있고 rate limit 표현이 없을 때만 멈춤
+# (분당 제한 같은 일시적 rate limit·구분 불가는 멈추지 않는다 — 잘못 멈추면 10분 동안 웹 검색이 빈다). 타임아웃·네트워크 오류도 멈추지 않는다.
+# 로그·trace 에는 상태 코드와 분류만 남긴다 (키·응답 본문은 남기지 않는다).
+PAUSE_SEC = 600
+_PAUSE_STATUS = {401: "인증 오류", 403: "인증 오류", 432: "크레딧·한도 초과", 433: "크레딧·한도 초과"}
+_CREDIT_WORDS = re.compile(r"credit|quota|usage limit|plan'?s? (?:set )?(?:usage )?limit|monthly|billing|upgrade", re.IGNORECASE)
+_RATE_WORDS = re.compile(r"rate.?limit|too many requests|per (?:minute|second)|slow down|try again", re.IGNORECASE)
+_pause: dict[str, Any] = {"until": 0.0, "status": 0, "kind": ""}
+_pause_lock = threading.Lock()
+
+
+def _now() -> float:
+    return time.time()
+
+
+class _Paused(Exception):
+    """Tavily 호출 멈춤 중 (네트워크 요청 없이 빈 결과)."""
+
+
+def _pause_kind(status: int, text: str) -> str | None:
+    """오류 응답 → 멈출 이유 또는 None (멈추지 않음)."""
+    if status in _PAUSE_STATUS:
+        return _PAUSE_STATUS[status]
+    if status == 429 and _CREDIT_WORDS.search(text or "") and not _RATE_WORDS.search(text or ""):
+        return "크레딧·한도 초과"
+    return None
+
+
+def pause_status() -> str:
+    """멈춘 상태면 trace 용 한 줄 (상태 코드·분류·남은 시간), 아니면 빈 문자열."""
+    with _pause_lock:
+        left = _pause["until"] - _now()
+        if left <= 0:
+            return ""
+        return f"Tavily 일시 중단(HTTP {_pause['status']}, {_pause['kind']}, 약 {max(1, round(left / 60))}분 남음)"
 
 
 def web_search(query: str, max_results: int = 4, days: int | None = None) -> list[dict[str, Any]]:
@@ -28,6 +70,8 @@ def web_search(query: str, max_results: int = 4, days: int | None = None) -> lis
         return []
 
     def _do() -> list[dict[str, Any]]:
+        if pause_status():
+            raise _Paused()
         body: dict[str, Any] = {
             "api_key": settings.tavily_api_key,
             "query": query,
@@ -39,6 +83,12 @@ def web_search(query: str, max_results: int = 4, days: int | None = None) -> lis
             body["days"] = days
             body["topic"] = "news"
         r = http().post(TAVILY_URL, json=body)
+        if r.status_code >= 400:
+            kind = _pause_kind(r.status_code, r.text if r.status_code == 429 else "")
+            if kind:
+                with _pause_lock:
+                    _pause.update(until=_now() + PAUSE_SEC, status=r.status_code, kind=kind)
+                log.warning("Tavily 호출 %d분 중단 (HTTP %d, %s)", PAUSE_SEC // 60, r.status_code, kind)
         r.raise_for_status()
         return [
             {"title": x.get("title", ""), "url": x.get("url", ""), "content": (x.get("content") or "")[:600],
@@ -92,6 +142,8 @@ def summarize_many(places: list[dict[str, str]], conditions: str) -> list[str]:
         results = list(ex.map(lambda p: web_search(f"{p.get('region', '')} {p['name']} 후기".strip(), 4), places))
     # 검색 결과에는 이름만 비슷한 다른 가게·무관한 글이 많이 섞인다 → 그 장소를 언급한 발췌만 남긴다
     results = [[r for r in res if mentions(p["name"], f"{r['title']} {r['content']}")] for p, res in zip(places, results, strict=True)]
+    if not any(results):  # T1-a: 근거 발췌가 하나도 없으면 LLM 요약을 부르지 않는다 (나와도 근거가 없어 전부 버려진다)
+        return ["" for _ in places]
     blocks = []
     for i, (p, res) in enumerate(zip(places, results, strict=True)):
         snippets = "\n".join(f"- {r['title']}: {r['content'][:220]}" for r in res[:4]) or "- (검색 결과 없음)"
