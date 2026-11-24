@@ -388,7 +388,7 @@ def test_time_of_day_metrics_from_response():
     assert t["long_pre_meal_legs"] == 1  # 카페→식당 38분 (자차 30분 초과)
     assert t["web_docs"] == 7
     row = ev.render_table({"gapyeong": m}).splitlines()[2]
-    assert row.endswith("| 1 | 1/1 | 1일 | 발동(60%) | 1 | 7 |")
+    assert "| 1 | 1/1 | 1일 | 발동(60%) | 1 | 7 |" in row  # 묶음 3 칸 (뒤에 묶음 4 칸이 이어진다)
 
 
 def test_time_of_day_walk_limit_and_no_rain():
@@ -396,7 +396,7 @@ def test_time_of_day_walk_limit_and_no_rain():
     m = ev.evaluate(_resp_day(places, [25], transport="walk", rain=False, pop=0.4, web=0), CENTER, 100_000)
     t = m["time_of_day"]
     assert t["long_pre_meal_legs"] == 1 and t["late_lunch_days"] == [] and t["rain_rule"] is False and t["dark_outdoor"] == 0
-    assert ev.render_table({"x": m}).splitlines()[2].endswith("| 0 | 0/0 | 0일 | -(40%) | 1 | 0 |")
+    assert "| 0 | 0/0 | 0일 | -(40%) | 1 | 0 |" in ev.render_table({"x": m}).splitlines()[2]
 
 
 def test_time_of_day_old_results_compatible(tmp_path):
@@ -404,10 +404,64 @@ def test_time_of_day_old_results_compatible(tmp_path):
     new = ev.evaluate(_resp_day(places, [5]), CENTER, 100_000)
     old = {k: v for k, v in new.items() if k != "time_of_day"}  # 옛 결과 파일: 새 지표 없음 (일정 원자료로 늦은 점심만 계산)
     assert ev.time_metrics_of(old)["late_lunch_days"] == ["1"] and ev.time_metrics_of(old)["dark_outdoor"] is None
-    assert ev.render_table({"x": old}).splitlines()[2].endswith("| - | - | 1일 | - | - | - |")
+    assert "| - | - | 1일 | - | - | - |" in ev.render_table({"x": old}).splitlines()[2]
     (tmp_path / "a.json").write_text(json.dumps({"date": "2026-11-28", "results": {"gapyeong_preset": old}}), encoding="utf-8")
     (tmp_path / "b.json").write_text(json.dumps({"date": "2026-11-28", "results": {"gapyeong_preset": new}}), encoding="utf-8")
     table = ev.summarize(ev.expand_paths([str(tmp_path / "*.json")]))
     assert "해 진 뒤 야외" in table and "| gapyeong_preset |" in table
     cmp = ev.render_compare({"gapyeong_preset": old}, {"gapyeong_preset": new})
     assert "늦은 점심" in cmp.splitlines()[0] and "| gapyeong_preset |" in cmp
+
+
+# ---------- 묶음 4 지표: 코스의 체인 수(사용자 지정 구분) · 자동 보충 술집 수 ----------
+
+
+def _resp_origin(names_cats, debug):
+    from odiro.api.schemas import TraceStep
+
+    places = [_p(i + 1, n, c) for i, (n, c) in enumerate(names_cats)]
+    r = _resp(places)
+    if debug is not None:
+        r.meta.trace = [TraceStep(node="optimize_route", status="done", detail="3곳 2구간", debug=debug)]
+    return r
+
+
+def test_origin_metrics_from_debug():
+    debug = ("Day 1 점심 순서: 점심 규칙 아님; 장소 출처: 체인 2곳(채선당월남쌈&샤브샤브 성수점: 사용자 지정, 스타벅스 서울숲역: 자동 보충 Q5), "
+             "자동 보충 술집 1곳(골목포차: 자동 보충 M4)")
+    m = ev.evaluate(_resp_origin([("채선당월남쌈&샤브샤브 성수점", "식당"), ("스타벅스 서울숲역", "카페"), ("골목포차", "식당")], debug), CENTER, 1500)
+    o = m["origins"]
+    assert o == {"chains": 2, "chains_user": 1, "auto_bars": 1}
+    assert ev.render_table({"x": m}).splitlines()[2].endswith("| 2 (사용자 1) | 1 |")
+
+
+def test_origin_metrics_unknown_is_dash_not_zero(tmp_path):
+    # 판단 기록이 없는 결과(옛 파일·debug 없음): 체인 수는 이름으로 셀 수 있지만 사용자 지정·자동 보충 술집은 모름 → '-'
+    m = ev.evaluate(_resp_origin([("채선당월남쌈&샤브샤브 성수점", "식당"), ("성수커피", "카페")], None), CENTER, 1500)
+    assert m["origins"] == {"chains": 1, "chains_user": None, "auto_bars": None}
+    assert ev.render_table({"x": m}).splitlines()[2].endswith("| 1 (사용자 -) | - |")
+    old = {k: v for k, v in m.items() if k != "origins"}  # 옛 결과 파일: origins 키 자체가 없음 → 저장된 일정 이름으로 체인 수만
+    assert ev.origin_metrics_of(old) == {"chains": 1, "chains_user": None, "auto_bars": None}
+    (tmp_path / "a.json").write_text(json.dumps({"date": "2026-11-26", "results": {"seongsu_walk": old}}), encoding="utf-8")
+    assert "| seongsu_walk |" in ev.summarize(ev.expand_paths([str(tmp_path / "*.json")]))
+    cmp = ev.render_compare({"seongsu_walk": old}, {"seongsu_walk": m})
+    assert "체인" in cmp.splitlines()[0] and "| seongsu_walk |" in cmp
+
+
+def test_origin_summary_does_not_hide_unknown_runs(tmp_path):
+    # 판단 기록이 없는 옛 실행(사용자 지정·자동술집 미확인)과 새 실행을 합칠 때, 미확인을 0 으로 더한 것처럼 보이면 안 된다
+    debug = "장소 출처: 체인 1곳(채선당월남쌈&샤브샤브 성수점: 사용자 지정), 자동 보충 술집 1곳(골목포차: 자동 보충 예비)"
+    new = ev.evaluate(_resp_origin([("채선당월남쌈&샤브샤브 성수점", "식당"), ("골목포차", "식당")], debug), CENTER, 1500)
+    old = {k: v for k, v in ev.evaluate(_resp_origin([("채선당월남쌈&샤브샤브 성수점", "식당")], None), CENTER, 1500).items() if k != "origins"}
+    assert ev._origin_cells([old, new]) == ["2 (사용자 1+미확인 1회)", "1+미확인 1회"]
+    assert ev._origin_cells([new]) == ["1 (사용자 1)", "1"] and ev._origin_cells([old]) == ["1 (사용자 -)", "-"]
+    (tmp_path / "a.json").write_text(json.dumps({"date": "2026-11-26", "results": {"seongsu_must": old}}), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps({"date": "2026-11-26", "results": {"seongsu_must": new}}), encoding="utf-8")
+    row = next(line for line in ev.summarize(ev.expand_paths([str(tmp_path / "*.json")])).splitlines() if line.startswith("| seongsu_must |"))
+    assert row.endswith("| 2 (사용자 1+미확인 1회) | 1+미확인 1회 |")
+
+
+def test_origin_system_selected_must_chain_not_counted_as_user():
+    debug = "장소 출처: 체인 2곳(스타벅스 강릉강문해변점: 꼭 넣을 곳(시스템 선택), 이디야커피 강릉점: 사용자 지정), 자동 보충 술집 0곳"
+    m = ev.evaluate(_resp_origin([("스타벅스 강릉강문해변점", "카페"), ("이디야커피 강릉점", "카페")], debug), CENTER, 1500)
+    assert m["origins"] == {"chains": 2, "chains_user": 1, "auto_bars": 0}

@@ -403,6 +403,55 @@ def _time_cells(ms: list[dict[str, Any]]) -> list[str]:
     return [total("dark_outdoor"), entry, lunch, rain, total("long_pre_meal_legs"), web]
 
 
+# ---------- 묶음 4 지표: 코스의 체인 수(사용자 지정 구분) · 자동 보충으로 들어간 술집 수 ----------
+# 체인 판정은 앱과 같은 함수(nodes._is_chain). 사용자 지정·자동 보충 술집은 앱이 optimize_route 의 trace debug 에 남긴
+# "장소 출처: 체인 N곳(이름: 출처, …), 자동 보충 술집 K곳(…)" 을 읽는다. 그 기록이 없으면 모른다 → None('-'), 0 으로 세지 않는다.
+_ORIGIN_RE = re.compile(r"장소 출처: 체인 (\d+)곳(\(.*?\))?, 자동 보충 술집 (\d+)곳")
+
+
+def _chain_count(names_cats: list[tuple[str, str]]) -> int:
+    from odiro.agent import nodes
+
+    return sum(1 for n, c in names_cats if c in (EAT, CAFE) and nodes._is_chain(n))
+
+
+def _origin_from_trace(trace: list[dict[str, Any]] | None) -> tuple[int | None, int | None]:
+    """(사용자 지정 체인 수, 자동 보충 술집 수). 판단 기록이 없으면 (None, None)."""
+    for t in trace or []:
+        if t.get("node") == "optimize_route" and (mt := _ORIGIN_RE.search(t.get("debug") or "")):
+            return (mt.group(2) or "").count(": 사용자 지정"), int(mt.group(3))
+    return None, None
+
+
+def origins_of(resp: CourseResponse) -> dict[str, Any]:
+    user, bars = _origin_from_trace(trace_of(resp))
+    return {"chains": _chain_count([(p.name, p.category) for p in resp.places]), "chains_user": user, "auto_bars": bars}
+
+
+def origin_metrics_of(m: dict[str, Any]) -> dict[str, Any]:
+    """결과 항목의 묶음 4 지표. 옛 결과 파일은 저장된 일정 이름으로 체인 수만 세고, 나머지는 trace debug 가 있을 때만."""
+    if m.get("origins") is not None:
+        return m["origins"]
+    places = (m.get("schedule") or {}).get("places")
+    user, bars = _origin_from_trace(m.get("trace"))
+    return {"chains": _chain_count([(x["name"], x["category"]) for x in places]) if places else None, "chains_user": user, "auto_bars": bars}
+
+
+def _origin_cells(ms: list[dict[str, Any]]) -> list[str]:
+    """표 칸: 체인(사용자) | 자동술집. 여러 실행이면 합계. 전부 모르면 '-', 일부만 모르면 '합+미확인 N회'
+    (판단 기록이 없는 옛 실행을 0 으로 더한 것처럼 보이지 않게)."""
+    os_ = [origin_metrics_of(m) for m in ms]
+
+    def total(key: str) -> str:
+        vals = [o[key] for o in os_ if o.get(key) is not None]
+        unknown = len(os_) - len(vals)
+        if not vals:
+            return "-"
+        return f"{sum(vals)}+미확인 {unknown}회" if unknown else str(sum(vals))
+
+    return [f"{total('chains')} (사용자 {total('chains_user')})", total("auto_bars")]
+
+
 def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int) -> dict[str, Any]:
     places = resp.places
     unverified = [p.name for p in places if is_unverified(p)]
@@ -445,6 +494,7 @@ def evaluate(resp: CourseResponse, center: dict[str, Any] | None, radius_m: int)
         "mislabels": len(mislabels),
         "mislabel_places": mislabels,
         "elapsed_s": round(resp.meta.elapsed_ms / 1000, 1),
+        "origins": origins_of(resp),  # 묶음 4: 체인 수(사용자 지정 구분)·자동 보충 술집 수
         "time_of_day": time_of_day(resp),  # 묶음 3: 해 진 뒤 야외·입장 마감·늦은 점심·비 규칙·식당 직전 장거리·웹 건수
         "trace": trace_of(resp),  # 노드별 판단 근거 (표·비교·요약에는 쓰지 않는다)
     }
@@ -479,13 +529,13 @@ def _sum_known(ms: list[dict[str, Any]], key: str) -> str:
 def render_table(results: dict[str, dict[str, Any]]) -> str:
     head = (
         "| 시나리오 | 장소 | 미확인 | 반경밖 | 구성(식당·카페·볼거리) | 예산 | 종료초과 | 중복의심 | 분류의심 | 볼거리0일 | 식·카3+일 "
-        "| 저녁식당없음 | 이른저녁 | 11시전식당 | 조기종료(분) | 날씨 | 경고 | 시간(초) | 해진뒤야외 | 마감후도착 | 늦은점심 | 비규칙 | 식당전장거리 | 웹 |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "| 저녁식당없음 | 이른저녁 | 11시전식당 | 조기종료(분) | 날씨 | 경고 | 시간(초) | 해진뒤야외 | 마감후도착 | 늦은점심 | 비규칙 | 식당전장거리 | 웹 | 체인(사용자) | 자동술집 |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
     rows = []
     for key, m in results.items():
         if m.get("error"):
-            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | | | | | | | | | | {m.get('elapsed_s', '')} | | | | | | |")
+            rows.append(f"| {key} | 실패: {m['error'][:60]} | | | | | | | | | | | | | | | | {m.get('elapsed_s', '')} | | | | | | | | |")
             continue
         meal = meal_summary([m])
         comp = comp_text(m["comp"]) + ("" if m["comp_ok"] else " ⚠구성 미흡")
@@ -496,7 +546,7 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
             f"| {key} | {m['places']} | {m['unverified']} | {out} | {comp} | {budget} | {late} | "
             f"{m.get('dup_suspects', '-')} | {m.get('mislabels', '-')} | {_q_count(m, 'no_play_days')} | {_q_count(m, 'crowded_days')} | "
             f"{meal['no_dinner']} | {meal['early_dinner']} | {meal['early_first_meal']} | {meal['early_end']} | "
-            f"{m['weather']} | {m['warnings']} | {m['elapsed_s']} | " + " | ".join(_time_cells([m])) + " |"
+            f"{m['weather']} | {m['warnings']} | {m['elapsed_s']} | " + " | ".join(_time_cells([m]) + _origin_cells([m])) + " |"
         )
     ok = [m for m in results.values() if not m.get("error")]
     if ok:
@@ -510,7 +560,7 @@ def render_table(results: dict[str, dict[str, Any]]) -> str:
             f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | {_sum_q(ok, 'no_play_days')} | {_sum_q(ok, 'crowded_days')} | "
             + " | ".join(meal_summary(ok).values())
             + f" | | {sum(m['warnings'] for m in ok)} | 평균 {sum(times) / len(times):.1f} · 최대 {times[-1]} | "
-            + " | ".join(_time_cells(ok)) + " |"
+            + " | ".join(_time_cells(ok) + _origin_cells(ok)) + " |"
         )
     return head + "\n".join(rows)
 
@@ -530,8 +580,8 @@ def _compare_cells(m: dict[str, Any]) -> list[str]:
 def render_compare(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]]) -> str:
     """같은 시나리오(이름 기준)끼리 핵심 지표를 전 → 후로 나란히. 옛 파일에 없는 지표는 '-'."""
     lines = [
-        "| 시나리오 | 미확인 | 반경밖 비율 | 구성 미흡 | 예산 초과 | 종료초과(분) | 중복의심 | 분류의심 | 경고 | 시간(초) | 해 진 뒤 야외 | 늦은 점심(날) | 식당 직전 장거리 |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| 시나리오 | 미확인 | 반경밖 비율 | 구성 미흡 | 예산 초과 | 종료초과(분) | 중복의심 | 분류의심 | 경고 | 시간(초) | 해 진 뒤 야외 | 늦은 점심(날) | 식당 직전 장거리 | 체인(사용자) | 자동술집 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
 
     def arrow(a: Any, b: Any, fmt: str = "{}") -> str:
@@ -542,7 +592,7 @@ def render_compare(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]
     for key, n in new.items():
         o = old.get(key)
         if not o or o.get("error") or n.get("error"):
-            lines.append(f"| {key} | (비교 불가) | | | | | | | | | | | |")
+            lines.append(f"| {key} | (비교 불가) | | | | | | | | | | | | | |")
             continue
         lines.append(
             f"| {key} | {arrow(o['unverified'], n['unverified'])} | {arrow(o['outside_ratio'], n['outside_ratio'], '{:.0%}')} | "
@@ -550,7 +600,7 @@ def render_compare(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]
             f"{arrow(o.get('overtime_max_min', '-'), n.get('overtime_max_min', 0))} | "
             f"{arrow(o.get('dup_suspects', '-'), n.get('dup_suspects', '-'))} | {arrow(o.get('mislabels', '-'), n.get('mislabels', '-'))} | "
             f"{arrow(o.get('warnings', '-'), n.get('warnings', '-'))} | {arrow(o['elapsed_s'], n['elapsed_s'])} | "
-            + " | ".join(arrow(a, b) for a, b in zip(_compare_cells(o), _compare_cells(n), strict=True)) + " |"
+            + " | ".join(arrow(a, b) for a, b in zip(_compare_cells(o) + _origin_cells([o]), _compare_cells(n) + _origin_cells([n]), strict=True)) + " |"
         )
     return "\n".join(lines)
 
@@ -583,15 +633,15 @@ def summarize(files: list[Path]) -> str:
         (
             "| 시나리오 | 실행 | 실패 | 미확인 합 | 반경밖 | 구성 미흡 | 카페 0곳인 날 | 예산 초과 | 종료초과 | 중복의심 합 | 분류의심 합 "
             "| 볼거리 0곳인 날 | 식당·카페 3곳+ 날 | 저녁 식당 없는 날 | 이른 저녁 날 | 11시 전 첫 식당 날 | 조기 종료 평균(분) | 경고 합 | 시간 평균·최대(초) "
-            "| 해 진 뒤 야외 | 입장 마감 후 도착 | 늦은 점심 날 | 비 규칙 발동 | 식당 직전 장거리 | 웹 평균 |"
+            "| 해 진 뒤 야외 | 입장 마감 후 도착 | 늦은 점심 날 | 비 규칙 발동 | 식당 직전 장거리 | 웹 평균 | 체인(사용자 지정) | 자동 보충 술집 |"
         ),
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for key in sorted(runs):
         ms = runs[key]
         ok = [m for m in ms if not m.get("error")]
         if not ok:
-            lines.append(f"| {key} | {len(ms)} | {len(ms)} | | | | | | | | | | | | | | | | | | | | | | |")
+            lines.append(f"| {key} | {len(ms)} | {len(ms)} | | | | | | | | | | | | | | | | | | | | | | | | |")
             continue
         n_places = sum(m["places"] for m in ok)
         no_cafe = sum(1 for m in ok for c in m["comp"].values() if c.get(CAFE, 0) == 0)
@@ -603,7 +653,7 @@ def summarize(files: list[Path]) -> str:
             f"{_sum_known(ok, 'dup_suspects')} | {_sum_known(ok, 'mislabels')} | {_sum_q(ok, 'no_play_days')} | {_sum_q(ok, 'crowded_days')} | "
             + " | ".join(meal_summary(ok).values())
             + f" | {sum(m['warnings'] for m in ok)} | {sum(times) / len(times):.1f} · {max(times)} | "
-            + " | ".join(_time_cells(ok)) + " |"
+            + " | ".join(_time_cells(ok) + _origin_cells(ok)) + " |"
         )
     return "\n".join(lines)
 
