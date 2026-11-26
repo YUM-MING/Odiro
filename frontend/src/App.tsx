@@ -1,23 +1,14 @@
 // 랜딩 페이지. 검색 카드(조건 빌더) → /plan 으로 이동.
-import { useEffect, useState, type ComponentType } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getConfigCheck, getHealth, getMoods, MOODS, type ConfigCheck, type CourseRequest, type Health } from './api'
 import Builder from './Builder'
 import DailyPick from './DailyPick'
+import Guide from './Guide'
 import HeroScene from './HeroScene'
-import * as I from './Icons'
 import { MOCK_ENABLED } from './mock'
 import { applyPreset, defaultRequest, loadRequest, PRESETS, saveCourse, saveRequest } from './request'
 import './App.css'
-
-type Icon = ComponentType<{ size?: number }>
-
-const FEATURES: { Icon: Icon; tone: string; title: string; desc: string }[] = [
-  { Icon: I.Robot, tone: 'coral', title: 'AI 맞춤 추천', desc: '취향과 조건을 분석해\n딱 맞는 여행 코스를 제안해요.' },
-  { Icon: I.Map, tone: 'green', title: '지도 기반 코스', desc: '추천 장소를 지도에서 확인하고\n동선까지 한눈에 볼 수 있어요.' },
-  { Icon: I.Car, tone: 'sun', title: '자차 여행도 OK', desc: '차로 떠나는 여행도 편하게!\n장소별 이동 시간까지 계산해요.' },
-  { Icon: I.Calendar, tone: 'peach', title: '일정 수정도 자유롭게', desc: '대화하듯 요청하면\n코스를 바로 수정할 수 있어요.' },
-]
 
 export default function App() {
   const navigate = useNavigate()
@@ -77,11 +68,8 @@ export default function App() {
         </a>
         <nav className="nav">
           <a href="#create">코스 만들기</a>
-          <a href="#features">이용 가이드</a>
+          <a href="#guide">이용 가이드</a>
         </nav>
-        <div className="header-actions">
-          <span className="header-note">코스 추천은 수도권 우선 · 숨은 여행지는 전국</span>
-        </div>
       </header>
 
       <main>
@@ -121,17 +109,7 @@ export default function App() {
 
         <DailyPick onUseRegion={applyRegion} />
 
-        <section className="features" id="features">
-          {FEATURES.map(({ Icon, tone, title, desc }) => (
-            <article className="feature" key={title}>
-              <div className={`feature-icon tone-${tone}`}><Icon size={30} /></div>
-              <div>
-                <h3>{title}</h3>
-                <p>{desc}</p>
-              </div>
-            </article>
-          ))}
-        </section>
+        <Guide />
       </main>
 
       <footer className="footer">

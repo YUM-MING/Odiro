@@ -55,13 +55,6 @@
 }
 .nav a:hover { color: var(--ink); }
 
-.header-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
 .icon-btn {
   width: 42px;
   height: 42px;
@@ -115,7 +108,9 @@
   letter-spacing: -0.03em;
   line-height: 1.12;
 }
-.headline em {
+.headline em,
+.guide-head h2 em,
+.guide-cta p em {
   font-style: normal;
   color: var(--coral);
   position: relative;
@@ -245,7 +240,6 @@
 
 /* ---------- builder (검색 카드 안 / 드로어) ---------- */
 .builder { display: flex; flex-direction: column; gap: 12px; }
-.header-note { font-size: 13px; color: var(--muted); font-weight: 600; }
 
 .field-input, .field-select {
   flex: 1;
@@ -261,7 +255,114 @@
 .field-select { flex: none; width: auto; color: var(--coral); font-weight: 700; cursor: pointer; }
 label.field { cursor: text; }
 label.field:focus-within { box-shadow: inset 0 0 0 1.5px var(--coral); }
-input[type='date'].field-input { cursor: pointer; }
+
+/* ---------- 날짜 칸 + 달력 팝업 (DatePicker.tsx) ---------- */
+/* .field 는 overflow: hidden 이라 팝업은 바깥 감싸개(date-wrap) 기준으로 띄운다 */
+.date-wrap { position: relative; min-width: 0; }
+.date-wrap > .field { height: 100%; }
+/* 칸 폭으로 알약을 숨길지 정한다 (팝업은 이 칸 바깥 형제라 container 영향을 받지 않는다) */
+.date-field { cursor: pointer; container-type: inline-size; }
+.date-field.open { box-shadow: inset 0 0 0 1.5px var(--coral); } /* 열려 있는 동안 코랄 테두리 (호버는 .field:hover) */
+.date-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+.date-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.date-placeholder { color: var(--muted); font-weight: 500; }
+/* 오늘과의 차이 알약: 오늘 / N일 후 (예보 반영 날이면 노란 점) */
+.date-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  line-height: 1.5;
+  border-radius: 999px;
+  background: var(--cream);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.date-pill .dp-dot { width: 6px; height: 6px; }
+/* 아래 화살표: 누르면 달력이 나온다는 표시. 열리면 위로 */
+.date-chev { flex: none; color: var(--muted); transition: transform 0.18s, color 0.18s; }
+.date-field:hover .date-chev, .date-field.open .date-chev { color: var(--coral); }
+.date-field.open .date-chev { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .date-chev { transition: none; } }
+/* 칸이 실제로 좁을 때만 알약을 숨긴다 (요일이 있는 날짜 글자와 화살표는 남긴다).
+   컨테이너 쿼리는 패딩(좌우 14px)을 뺀 '내용 폭'을 잰다. 데스크톱(히어로 두 열)의 날짜 칸은 약 256px → 내용 폭 228px 이고,
+   여기에 아이콘 + "12월 31일 (수)" + "● 12일 후" + ▾ 가 들어간다(약 226px). 그보다 좁은 칸(모바일 좁은 화면 등)에서만 숨긴다 */
+@container (max-width: 200px) { .date-pill { display: none; } }
+.datepop {
+  --sat-blue: #3a6fd8; /* 토요일 글자 (색 토큰에 파랑이 없어 달력에서만 쓴다) */
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0; /* 날짜 칸 왼쪽 끝에 맞춰 연다 */
+  z-index: 50; /* 프리셋 칩·만들기 버튼·숨은 여행지 배너 위 */
+  width: 100%; /* 날짜 칸 폭에 맞추되 320~380px */
+  min-width: 320px;
+  max-width: 380px;
+  padding: 14px 16px 12px;
+  background: var(--card); /* 불투명: 뒤 요소가 비치지 않게 */
+  border-radius: var(--radius-md);
+  box-shadow: 0 24px 60px rgba(43, 42, 51, 0.16), 0 8px 20px rgba(255, 150, 90, 0.16), 0 0 0 1px var(--line);
+}
+.dp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.dp-title { font-size: 16px; font-weight: 800; color: var(--ink); }
+.dp-nav {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-soft);
+}
+.dp-nav:hover:not(:disabled) { background: var(--coral-soft); color: var(--coral); }
+.dp-nav:disabled { opacity: 0.3; cursor: default; }
+.dp-nav.prev svg { transform: rotate(90deg); }
+.dp-nav.next svg { transform: rotate(-90deg); }
+/* 포커스: 기본 테두리 대신 키보드(focus-visible)일 때만 코랄 톤 링. 마우스 클릭으로는 생기지 않는다 */
+.dp-nav:focus, .dp-day:focus { outline: none; }
+.dp-nav:focus-visible { box-shadow: 0 0 0 3px var(--coral-soft); }
+
+/* 7칸이 팝업 안쪽 폭을 정확히 나눠 쓴다 (고정 px 폭 없음). 칸은 정사각, 원은 칸의 80% */
+.dp-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.dp-wd { text-align: center; font-size: 12.5px; font-weight: 700; color: var(--muted); padding: 4px 0 6px; }
+.dp-wd.sun, .dp-day.sun { color: var(--coral); }
+.dp-wd.sat, .dp-day.sat { color: var(--sat-blue); }
+.dp-cell { aspect-ratio: 1; min-width: 0; }
+.dp-day {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.dp-num {
+  width: 80%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  transition: background 0.12s;
+}
+.dp-day:hover:not(:disabled) .dp-num { background: var(--coral-soft); }
+.dp-day.today .dp-num { box-shadow: inset 0 0 0 1.5px var(--coral); }
+.dp-day.sel .dp-num { background: var(--coral); color: #fff; }
+.dp-day:focus-visible .dp-num { box-shadow: 0 0 0 3px var(--coral-soft); }
+.dp-day.today:focus-visible .dp-num { box-shadow: inset 0 0 0 1.5px var(--coral), 0 0 0 3px var(--coral-soft); }
+.dp-day.past { color: var(--muted); opacity: 0.45; cursor: default; }
+.dp-dot { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--sun); }
+.dp-day .dp-dot { position: absolute; bottom: 4%; left: 50%; margin-left: -2px; }
+.dp-legend { margin: 8px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 
 .field-seg { gap: 6px; padding: 8px 10px; }
 .seg {
@@ -339,7 +440,7 @@ input[type='date'].field-input { cursor: pointer; }
 .scene { width: 100%; height: auto; display: block; filter: drop-shadow(0 30px 40px rgba(255, 160, 90, 0.2)); }
 
 /* ---------- 오늘의 숨은 여행지 ---------- */
-/* 바깥은 header·hero·features 와 같은 컨테이너(최대 1440px, 좌우 48px / 720px 이하 20px) */
+/* 바깥은 header·hero·이용 가이드와 같은 컨테이너(최대 1440px, 좌우 48px / 720px 이하 20px) */
 .daily-wrap {
   max-width: 1440px;
   width: 100%;
@@ -399,15 +500,18 @@ input[type='date'].field-input { cursor: pointer; }
 }
 .daily-meta { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
 .daily-meta-sep { margin: 0 6px; }
-/* 버튼은 글 바로 옆(32px)에 세로로, 세로 가운데 */
-.daily-actions { display: flex; flex-direction: column; gap: 8px; padding: 16px 24px 16px 32px; }
+/* 버튼은 글 바로 옆(32px)에 세로로, 세로 가운데. 두 버튼은 같은 폭(긴 쪽 기준, 최소 200px) */
+.daily-actions { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 10px; padding: 16px 24px 16px 32px; }
 .daily-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 7px 14px;
-  font-size: 13.5px;
+  gap: 6px;
+  min-width: 200px;
+  padding: 12px 20px; /* 높이 약 44px */
+  border-radius: var(--radius-sm); /* 배너 카드(--radius-lg)와 같은 인상의 한 단계 작은 둥근 사각형 */
+  font-size: 14px;
+  line-height: 20px;
   white-space: nowrap;
   text-decoration: none;
 }
@@ -415,40 +519,173 @@ input[type='date'].field-input { cursor: pointer; }
 .daily-btn-line { background: var(--card); color: var(--ink); box-shadow: 0 0 0 1.5px var(--line); }
 .daily-btn-line:hover { box-shadow: 0 0 0 1.5px var(--muted); }
 
-/* ---------- features ---------- */
-.features {
+/* ---------- 이용 가이드 (Guide.tsx, #guide): 일러스트 카드형 ---------- */
+.guide {
+  /* 일러스트에서만 쓰는 톤 (HeroScene 의 단색 팔레트와 같은 값) */
+  --gd-mint: #dcf3df;
+  --gd-mint-deep: #8ad28c;
+  --gd-sky-deep: #8fd3f4;
+  --gd-sun-soft: #ffecb8;
+  --gd-outline: #f0e4d6;
+  --gd-beige: #fbf1e0;
+  --gd-brown: #9a6a2c;
   max-width: 1440px;
   width: 100%;
   margin: 0 auto;
-  padding: 16px 48px 48px;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  padding: 80px 48px 56px; /* 위 +48px: 숨은 여행지 배너와 별개 섹션으로 보이게 */
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
+.guide h2, .guide h3, .guide p, .guide small { text-wrap: pretty; } /* 한 글자만 다음 줄로 넘어가지 않게 */
+.guide-head { text-align: center; margin-bottom: 28px; }
+.guide-label {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #fff0c7;
+  color: var(--gd-brown);
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+.guide-head h2 { margin: 14px 0 8px; font-size: 32px; font-weight: 800; letter-spacing: -0.03em; color: var(--ink); }
+.guide-desc { margin: 0; color: var(--ink-soft); font-size: 15.5px; }
 
-.feature {
+.guide-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.guide-card {
   display: flex;
-  gap: 16px;
-  padding: 8px 24px;
-  border-left: 1px solid var(--line);
+  flex-direction: column;
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: 0 0 0 1px var(--line), 0 10px 24px rgba(255, 150, 90, 0.08);
 }
-.feature:first-child { border-left: 0; padding-left: 0; }
-
-.feature-icon {
-  flex: none;
-  width: 64px;
-  height: 64px;
-  border-radius: 20px;
+/* 일러스트 영역: 크림 둥근 사각형. 번짐 효과 없이 SVG 안의 단색 원으로 (HeroScene 처럼 플랫) */
+.guide-art {
+  aspect-ratio: 16 / 8.8; /* 예전 16:10 보다 약 12% 낮게 */
+  border-radius: var(--radius-md);
+  background: var(--cream);
+  overflow: hidden;
   display: grid;
   place-items: center;
-  box-shadow: 0 10px 22px rgba(255, 150, 90, 0.18);
 }
-.tone-coral { background: var(--coral-soft); color: var(--coral); }
-.tone-green { background: #e4f6e4; color: #2f9e55; }
-.tone-sun { background: #fff0c7; color: #d98c12; }
-.tone-peach { background: var(--peach); color: #d9542f; }
+.guide-art svg { width: auto; height: 94%; max-width: 94%; display: block; }
+.guide-body { padding: 16px 8px 6px; }
+.guide-step { font-size: 12.5px; font-weight: 800; color: var(--coral); letter-spacing: 0.06em; }
+.guide-body h3 { margin: 6px 0 8px; font-size: 21px; font-weight: 800; letter-spacing: -0.02em; color: var(--ink); }
+.guide-body p { margin: 0; color: var(--ink-soft); font-size: 14.5px; line-height: 1.65; }
 
-.feature h3 { margin: 4px 0 6px; font-size: 18px; font-weight: 800; }
-.feature p { margin: 0; color: var(--ink-soft); font-size: 14.5px; line-height: 1.6; white-space: pre-line; }
+/* 일러스트 색 (SVG 클래스): HeroScene 과 같은 단색 면 + 선명한 윤곽, 그라데이션·투명도 최소화 */
+.gd-bg-sun { fill: var(--gd-sun-soft); }
+.gd-bg-mint { fill: var(--gd-mint); }
+.gd-card { fill: #fff; stroke: var(--gd-outline); stroke-width: 2.5; }
+.gd-coral { fill: var(--coral); }
+.gd-sun { fill: #ffd166; }
+.gd-peach { fill: #ffb199; }
+.gd-mint { fill: var(--gd-mint-deep); }
+.gd-sky { fill: var(--gd-sky-deep); }
+.gd-gray { fill: #efe7dc; }
+.gd-field { fill: #fff8f0; stroke: var(--gd-outline); stroke-width: 1.5; }
+.gd-line { fill: #e6dccf; }
+.gd-line-soft { fill: #f0e8de; }
+.gd-white { fill: #fff; }
+.gd-stroke-white { fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.gd-map-a { fill: #fff; stroke: var(--gd-outline); stroke-width: 2; stroke-linejoin: round; }
+.gd-map-b { fill: #fff8f0; stroke: var(--gd-outline); stroke-width: 2; stroke-linejoin: round; }
+.gd-wave-sky { fill: none; stroke: var(--gd-sky-deep); stroke-width: 5; stroke-linecap: round; }
+.gd-wave-mint { fill: none; stroke: var(--gd-mint-deep); stroke-width: 4; stroke-linecap: round; }
+.gd-route { fill: none; stroke: var(--coral); stroke-width: 2.5; stroke-dasharray: 3 5; stroke-linecap: round; }
+.gd-pin { fill: var(--coral); stroke: #fff; stroke-width: 2; }
+.gd-pin-num { fill: #fff; font-size: 10px; font-weight: 800; font-family: inherit; }
+
+/* 팁 박스 */
+/* 카드 전체 폭의 약 82%, 가운데. 8개 항목은 2열 × 4행 */
+/* 안쪽 좌우 패딩 같게, 위·아래 여백은 제목→그리드(22px)·그리드→아래 끝(22px)이 대칭 */
+.guide-tips { width: 82%; margin: 24px auto 0; padding: 22px 32px; border-radius: var(--radius-lg); background: var(--gd-beige); }
+.guide-tips-title { margin: 0 0 22px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 18px; font-weight: 800; color: var(--ink); }
+.guide-tips-title svg { color: #d98c12; }
+/* 그리드 전체를 가운데(max-width), 모든 행 높이 같게(두 줄 설명 기준), 행 간격 하나로 */
+.guide-tips ul {
+  list-style: none;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  align-items: start;
+  gap: 18px 48px;
+}
+.guide-tips li { display: flex; align-items: flex-start; gap: 14px; min-width: 0; } /* 아이콘 상단 = 제목 첫 줄 상단, 아이콘-글 간격 모두 같게 */
+.guide-tips li > span:last-child { min-width: 0; }
+.guide-tip-icon {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  color: var(--coral);
+  box-shadow: 0 4px 12px rgba(255, 150, 90, 0.12);
+}
+.guide-tips strong { display: block; font-size: 16.5px; font-weight: 800; line-height: 1.4; color: var(--ink); }
+.guide-tips small {
+  margin-top: 3px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  word-break: keep-all;
+  /* 설명은 최대 두 줄 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* 마무리 CTA */
+.guide-cta { margin-top: 32px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.guide-cta p { margin: 0; font-size: 20px; font-weight: 800; color: var(--ink); }
+.guide-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 28px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--coral), #ff7b5c);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  box-shadow: 0 12px 26px rgba(255, 107, 74, 0.32);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.guide-cta-btn:hover { transform: translateY(-2px); box-shadow: 0 16px 30px rgba(255, 107, 74, 0.38); }
+.guide-cta-btn:focus { outline: none; }
+.guide-cta-btn:focus-visible { box-shadow: 0 0 0 4px var(--coral-soft), 0 12px 26px rgba(255, 107, 74, 0.32); }
+@media (prefers-reduced-motion: reduce) { .guide-cta-btn { transition: none; } .guide-cta-btn:hover { transform: none; } }
+
+/* 1100px 이하: 3열을 유지하면 카드가 좁아 글이 깨지므로 2+1 (세 번째 카드는 가운데) */
+@media (max-width: 1100px) {
+  .guide { padding-top: 64px; } /* 태블릿: 위 +32px */
+  .guide-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .guide-card:nth-child(3) { grid-column: 1 / -1; width: calc(50% - 11px); justify-self: center; }
+  .guide-tips { width: 100%; padding: 22px 24px; } /* 태블릿: 카드 폭 그대로, 같은 규칙 */
+  .guide-tips ul { gap: 18px 40px; }
+}
+@media (max-width: 720px) {
+  .guide { padding: 44px 20px 40px; } /* 모바일: 위 +24px */
+  .guide-head h2 { font-size: 24px; }
+  .guide-steps { grid-template-columns: 1fr; gap: 16px; }
+  .guide-card:nth-child(3) { width: auto; }
+  .guide-tips { width: 100%; padding: 20px 16px; }
+  .guide-tips-title { margin-bottom: 20px; }
+  .guide-tips ul { grid-template-columns: 1fr; gap: 16px; }
+  .guide-tips strong { font-size: 16px; }
+  .guide-body h3 { font-size: 19px; }
+  .guide-cta p { font-size: 18px; }
+}
+
 
 /* ---------- footer / status ---------- */
 .footer {
@@ -472,12 +709,11 @@ input[type='date'].field-input { cursor: pointer; }
   .hero { grid-template-columns: 1fr; }
   .hero-copy { max-width: none; }
   .hero-art { max-width: 680px; margin: 0 auto; }
-  .features { grid-template-columns: repeat(2, 1fr); row-gap: 24px; }
-  .feature:nth-child(3) { border-left: 0; padding-left: 0; }
   .daily { grid-template-columns: clamp(240px, 32%, 340px) minmax(0, 1fr); }
   .daily-photo { grid-row: span 2; }
   .daily-body { padding: 16px 24px 4px 30px; }
-  .daily-actions { flex-direction: row; flex-wrap: wrap; padding: 6px 24px 16px 30px; }
+  .daily-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; padding: 6px 24px 16px 30px; }
+  .daily-btn { min-width: 0; } /* 글 아래 한 줄: 폭은 내용에 맞춘다 */
 }
 
 @media (max-width: 720px) {
@@ -487,7 +723,7 @@ input[type='date'].field-input { cursor: pointer; }
   .hero { padding: 12px 20px 32px; }
   .headline { font-size: 38px; }
   .mode-tabs, .fields { grid-template-columns: 1fr; }
-  .features { grid-template-columns: 1fr; padding: 8px 20px 40px; }
+  .datepop { min-width: 0; max-width: none; padding: 12px; } /* 날짜 칸(= 빌더 한 열) 폭 */
   .daily-wrap { padding: 0 20px 16px; }
   .daily { grid-template-columns: 1fr; } /* 사진 위, 글 아래 */
   .daily-photo { width: 100%; height: 160px; min-height: 0; grid-row: auto; }
@@ -495,6 +731,5 @@ input[type='date'].field-input { cursor: pointer; }
   .daily-name { font-size: 20px; }
   .daily-desc { font-size: 14.5px; }
   .daily-actions { flex-direction: row; flex-wrap: wrap; padding: 8px 16px 16px; }
-  .feature { border-left: 0; padding-left: 0; }
   .footer { flex-direction: column; gap: 6px; padding: 16px 20px; }
 }

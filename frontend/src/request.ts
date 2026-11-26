@@ -5,7 +5,7 @@ const REQ_KEY = 'odiro.request'
 const COURSE_KEY = 'odiro.course'
 
 // toISOString 은 UTC 라 한국 저녁엔 하루가 밀린다 → 브라우저 로컬 날짜로 YYYY-MM-DD 조립
-function localYmd(d: Date): string {
+export function localYmd(d: Date): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const dd = String(d.getDate()).padStart(2, '0')
   return `${d.getFullYear()}-${mm}-${dd}`
@@ -18,15 +18,14 @@ export function kstYmd(d: Date = new Date()): string {
   return `${get('year')}-${get('month')}-${get('day')}`
 }
 
-/** 다음 토요일 (오늘이 토요일이면 오늘). */
-export function nextSaturday(from = new Date()): string {
+/** 기본 출발일: 다음 날(내일, 브라우저 기준). */
+export function nextDay(from = new Date()): string {
   const d = new Date(from)
-  const diff = (6 - d.getDay() + 7) % 7
-  d.setDate(d.getDate() + diff)
+  d.setDate(d.getDate() + 1)
   return localYmd(d)
 }
 
-/** 저장된 날짜가 오늘(브라우저 기준)보다 이전이면 날짜만 기본값(다음 토요일)으로 바꾼다. 다른 값은 그대로 */
+/** 저장된 날짜가 오늘(브라우저 기준)보다 이전이면 날짜만 기본값(내일)으로 바꾼다. 다른 값은 그대로 */
 export function withValidDate(r: CourseRequest, now = new Date()): CourseRequest {
   return r.date < localYmd(now) ? { ...r, date: defaultRequest().date } : r
 }
@@ -36,7 +35,7 @@ export function defaultRequest(): CourseRequest {
     mode: 'outing',
     transport: 'walk',
     region: '',
-    date: nextSaturday(),
+    date: nextDay(),
     start_time: '11:00',
     end_time: '20:00',
     days: 1,

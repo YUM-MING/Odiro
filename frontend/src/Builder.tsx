@@ -1,6 +1,7 @@
 // 조건 빌더. 랜딩의 검색 카드와 /plan 의 조건 변경 드로어에서 같이 쓴다.
 import { useState, type ComponentType } from 'react'
 import type { CourseRequest, Mode } from './api'
+import DatePicker from './DatePicker'
 import * as I from './Icons'
 import { formatBudget } from './request'
 
@@ -37,6 +38,9 @@ export default function Builder({
   const [uiMode, setUiMode] = useState<UiMode>(value.mode === 'trip' ? 'trip' : value.party.includes('연인') ? 'date' : 'day')
   const [more, setMore] = useState(expanded)
   const [error, setError] = useState<string | null>(null)
+  // 총 인원 입력 중인 글자 (null = 입력 중 아님 → value.headcount 를 그대로 보여 준다). 빈칸을 허용해 새 숫자를 칠 수 있게 하고,
+  // value.headcount 는 숫자가 있을 때만 1~20 으로 보정해 바로 반영한다 (예산 안내·제출은 항상 보정된 값). 칸을 벗어나거나 Enter·제출 때 글자를 정리한다
+  const [headText, setHeadText] = useState<string | null>(null)
 
   const set = <K extends keyof CourseRequest>(k: K, v: CourseRequest[K]) => onChange({ ...value, [k]: v })
 
@@ -53,8 +57,16 @@ export default function Builder({
   const toggleMood = (m: string) =>
     set('moods', value.moods.includes(m) ? value.moods.filter((x) => x !== m) : [...value.moods, m])
 
+  const clampHead = (n: number) => Math.min(20, Math.max(1, Math.round(n)))
+  const typeHead = (raw: string) => {
+    const digits = raw.replace(/[^0-9]/g, '').slice(0, 2)
+    setHeadText(digits)
+    if (digits) set('headcount', clampHead(Number(digits)))
+  }
+
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault()
+    setHeadText(null)
     if (!value.region.trim()) {
       setError('어디로 갈지 지역을 입력해 주세요. 예) 성수동, 가평, 인천 송도')
       return
@@ -97,15 +109,7 @@ export default function Builder({
             autoComplete="off"
           />
         </label>
-        <label className="field">
-          <span className="field-icon"><I.Calendar /></span>
-          <input
-            className="field-input"
-            type="date"
-            value={value.date}
-            onChange={(e) => set('date', e.target.value)}
-            aria-label="날짜"
-          />
+        <DatePicker value={value.date} onChange={(d) => set('date', d)}>
           {value.mode === 'trip' && (
             <select
               className="field-select"
@@ -117,7 +121,7 @@ export default function Builder({
               <option value={3}>2박 3일</option>
             </select>
           )}
-        </label>
+        </DatePicker>
         {value.mode === 'trip' && (
           <label className="field field-wide">
             <span className="field-icon"><I.Pin /></span>
@@ -180,8 +184,17 @@ export default function Builder({
                 className="headcount"
                 min={1}
                 max={20}
-                value={value.headcount}
-                onChange={(e) => set('headcount', Math.min(20, Math.max(1, Math.round(Number(e.target.value)) || 1)))}
+                inputMode="numeric"
+                value={headText ?? String(value.headcount)}
+                onFocus={() => setHeadText(String(value.headcount))}
+                onChange={(e) => typeHead(e.target.value)}
+                onBlur={() => setHeadText(null)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault() // Enter 는 인원 확정만 (제출하지 않음)
+                    setHeadText(null)
+                  }
+                }}
                 aria-label="총 인원(본인 포함)"
               />
             </label>

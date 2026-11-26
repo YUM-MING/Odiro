@@ -155,8 +155,10 @@ def test_request_body_matches_frontend_presets():
     assert gp["days"] == 2 and gp["mode"] == "trip" and gp["date"] == "2026-11-28" and gp["free_text"] == "" and gp["lodging"] == ""
     sb = st.build_request(st.PRESETS[3], "2026-11-28")
     assert sb["days"] == 1 and sb["party"] == "" and "day_starts" not in sb
-    assert st.next_saturday(__import__("datetime").date(2026, 11, 24)) == "2026-11-28"
-    assert st.next_saturday(__import__("datetime").date(2026, 11, 28)) == "2026-11-28"
+    assert st.next_day(__import__("datetime").date(2026, 11, 24)) == "2026-11-25"
+    assert st.next_day(__import__("datetime").date(2026, 11, 30)) == "2026-12-01"  # 달이 바뀌어도
+    src = (ROOT / "frontend" / "src" / "request.ts").read_text(encoding="utf-8")
+    assert "date: nextDay()," in src  # 사이트 기본 출발일 = 내일 (request.ts defaultRequest)
     assert [it["preset"]["label"] for it in st.plan_of(st.parse_args(["--runs", "20"]))].count("가평 1박 2일") == 4
 
 

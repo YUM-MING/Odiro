@@ -101,10 +101,10 @@ SLOTS: dict[str, list[str]] = {
 }
 
 
-def next_saturday(today: date | None = None) -> str:
-    """request.ts nextSaturday(): 다음 토요일 (오늘이 토요일이면 오늘)."""
+def next_day(today: date | None = None) -> str:
+    """request.ts nextDay(): 사이트의 기본 출발일 = 다음 날(내일). (측정 계획은 이 값이 아니라 forecast_dates 를 쓴다)"""
     d = today or date.today()
-    return (d + timedelta(days=(5 - d.weekday()) % 7)).isoformat()
+    return (d + timedelta(days=1)).isoformat()
 
 
 def forecast_dates(today: date | None = None) -> list[str]:

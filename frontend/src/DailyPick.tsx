@@ -61,10 +61,10 @@ export default function DailyPick({ onUseRegion }: { onUseRegion: (region: strin
         </div>
         <div className="daily-actions">
           <a className="btn daily-btn daily-btn-line" href={pick.kakao_map_url} target="_blank" rel="noopener noreferrer">
-            <I.Map size={14} /> 카카오맵에서 보기
+            <I.Map size={16} /> 카카오맵에서 보기
           </a>
           <button type="button" className="btn btn-primary daily-btn" onClick={() => onUseRegion(pick.region)}>
-            <I.Sparkle size={14} /> 이 지역으로 코스 만들기
+            <I.Sparkle size={16} /> 이 지역으로 코스 만들기
           </button>
         </div>
       </div>
