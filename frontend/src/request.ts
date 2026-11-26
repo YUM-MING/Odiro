@@ -11,6 +11,13 @@ function localYmd(d: Date): string {
   return `${d.getFullYear()}-${mm}-${dd}`
 }
 
+/** 한국 날짜 YYYY-MM-DD (브라우저 시간대와 무관하게 Asia/Seoul). 형식은 localYmd 와 같다 — 오늘의 숨은 여행지 요청용 */
+export function kstYmd(d: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d)
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
 /** 다음 토요일 (오늘이 토요일이면 오늘). */
 export function nextSaturday(from = new Date()): string {
   const d = new Date(from)

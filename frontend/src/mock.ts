@@ -1,7 +1,17 @@
 // 백엔드 없이 UI 를 끝까지 확인하기 위한 목 데이터. VITE_MOCK=1 이거나 백엔드에 연결이 안 될 때 사용.
-import type { CourseRequest, CourseResponse, TraceStep } from './api'
+import type { CourseRequest, CourseResponse, DailyPick, TraceStep } from './api'
 
 export const MOCK_ENABLED = import.meta.env.VITE_MOCK === '1'
+
+/** 오늘의 숨은 여행지 목 (VITE_MOCK=1). 이미지는 비워 두어 기본 그림이 나오게 한다 (오프라인에서도 보이도록) */
+export function mockDailyPick(date: string): DailyPick {
+  return {
+    date, content_id: 'mock', name: '영월 청령포', sido: '강원', sigungu: '영월군', region: '강원 영월군',
+    description: '남한강 상류, 삼면이 물로 둘러싸인 곳. 단종이 유배되어 머물던 역사가 남아 있고 울창한 송림이 장관을 이룬다.',
+    image: '', lat: 37.1766, lng: 128.4434,
+    kakao_map_url: 'https://map.kakao.com/link/map/영월 청령포,37.1766,128.4434', source: '한국관광공사',
+  }
+}
 
 export const GENERATE_NODES = [
   'parse_intent',

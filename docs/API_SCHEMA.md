@@ -11,6 +11,7 @@
 | GET | `/api/public-config` | `{kakao_js_api_key}` — 프론트 지도 SDK 로드용 |
 | GET | `/api/config-check` | `{ready, missing[]}` — 비어 있는 API 키 이름 (값은 노출하지 않음) |
 | GET | `/api/moods` | 분위기 태그 목록 `{moods: string[]}` |
+| GET | `/api/daily-pick?date=YYYY-MM-DD` | 오늘의 숨은 여행지 `DailyPick` (date 생략 시 KST 오늘). 후보 없으면 404, 날짜 형식 오류 422 |
 | POST | `/api/course` | **동기** 코스 생성. 본문 `CourseRequest` → `CourseResponse` (90초 넘으면 503) |
 | POST | `/api/course/start` | **비동기** 시작. 본문 `CourseRequest` → `{job_id, stream_url}` |
 | GET | `/api/course/stream/{job_id}` | SSE. `progress` 이벤트(노드 진행) 여러 번 → `result` 1번 (또는 `error`) |
@@ -102,6 +103,20 @@
 
 응답은 `CourseResponse`. `course_id` 는 새로 발급, `meta.trace` 는 `modify → verify_places → optimize_route → enrich → compose_answer` 만 포함.
 `instruction` 에 "3번째", "마지막", "2일차 첫 번째" 같은 순서 표현이 하나만 있으면 `target_order` 없이도 서버가 대상을 확정한다.
+
+## DailyPick (`GET /api/daily-pick`)
+
+```jsonc
+{
+  "date": "2026-12-01", "content_id": "125...", "name": "영월 청령포",
+  "sido": "강원", "sigungu": "영월군", "region": "강원 영월군",   // region 은 조건 빌더에 그대로 넣는 문자열
+  "description": "소개글 앞부분 (140자 이내)", "image": "https://tong.visitkorea.or.kr/...",
+  "lat": 37.17, "lng": 128.44, "kakao_map_url": "https://map.kakao.com/link/map/이름,위도,경도", "source": "한국관광공사"
+}
+```
+
+후보는 `scripts/build_intro_lookup.py` 가 `data/tour_intro.json` 에 표시한 TourAPI 관광지(수도권·부산·제주 제외, 자연·인문, 사진·소개글 있음).
+서버는 시군구를 돌아가며 고르는 고정 순서에서 날짜마다 한 곳을 준다(같은 날짜 = 같은 장소). 외부 API 호출 없음.
 
 ## SSE (`GET /api/course/stream/{job_id}`)
 

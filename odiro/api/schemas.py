@@ -145,6 +145,23 @@ class JobStarted(BaseModel):
     stream_url: str
 
 
+class DailyPick(BaseModel):
+    """GET /api/daily-pick — 오늘의 숨은 여행지 (TourAPI 관광지 한 곳, 날짜마다 고정)."""
+
+    date: str  # YYYY-MM-DD (KST)
+    content_id: str  # TourAPI contentid
+    name: str
+    sido: str  # 짧은 시도 이름. 예) 경북
+    sigungu: str  # 예) 경주시. 세종처럼 없으면 빈 문자열
+    region: str  # 조건 빌더에 넣을 지역 문자열. 예) "경북 경주시"
+    description: str  # 소개글 앞부분 (140자 이내)
+    image: str  # https 대표 이미지
+    lat: float
+    lng: float
+    kakao_map_url: str
+    source: str = "한국관광공사"
+
+
 # SSE 이벤트 (GET /api/course/stream/{job_id})
 #   event: progress  data: TraceStep
 #   event: result    data: CourseResponse

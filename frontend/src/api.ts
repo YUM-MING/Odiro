@@ -154,6 +154,26 @@ export interface JobStarted {
   stream_url: string
 }
 
+/** GET /api/daily-pick — 오늘의 숨은 여행지 (TourAPI 관광지 한 곳, 날짜마다 고정) */
+export interface DailyPick {
+  date: string // YYYY-MM-DD (KST)
+  content_id: string
+  name: string
+  sido: string // 예) 경북
+  sigungu: string // 예) 경주시 (세종처럼 없으면 빈 문자열)
+  region: string // 조건 빌더에 넣을 지역 문자열. 예) "경북 경주시"
+  description: string
+  image: string // https
+  lat: number
+  lng: number
+  kakao_map_url: string
+  source: string
+}
+
+/** date: 한국 날짜 YYYY-MM-DD. 후보가 없으면 404 → 호출한 쪽에서 배너를 숨긴다 */
+export const getDailyPick = (date: string) =>
+  api.get<DailyPick>('/api/daily-pick', { params: { date } }).then((r) => r.data)
+
 /** timeout: Cloud Run 콜드스타트(최소 인스턴스 0)로 첫 응답이 늦을 수 있어 랜딩 확인은 넉넉히 준다 */
 export const getHealth = (timeout = 60_000) => api.get<Health>('/api/health', { timeout }).then((r) => r.data)
 export const getConfigCheck = () => api.get<ConfigCheck>('/api/config-check').then((r) => r.data)

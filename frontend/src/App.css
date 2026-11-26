@@ -338,6 +338,83 @@ input[type='date'].field-input { cursor: pointer; }
 .hero-art { width: 100%; }
 .scene { width: 100%; height: auto; display: block; filter: drop-shadow(0 30px 40px rgba(255, 160, 90, 0.2)); }
 
+/* ---------- 오늘의 숨은 여행지 ---------- */
+/* 바깥은 header·hero·features 와 같은 컨테이너(최대 1440px, 좌우 48px / 720px 이하 20px) */
+.daily-wrap {
+  max-width: 1440px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 48px 16px;
+}
+/* 사진(카드 폭의 34%, 280~480px) | 글(최대 640px) | 버튼 | 남는 공간. 글과 버튼을 사진 쪽으로 모으고 남는 폭은 오른쪽 끝에 둔다 */
+.daily {
+  display: grid;
+  grid-template-columns: clamp(280px, 34%, 480px) minmax(0, 640px) auto minmax(0, 1fr);
+  align-items: center;
+  /* 흰색 → 페이지 크림(--cream)의 아주 옅은 그라데이션. 그림자는 기능 아이콘 그림자 정도로 약하게 + 선 */
+  background: linear-gradient(120deg, var(--card) 0%, var(--cream) 100%);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 1px var(--line), 0 10px 24px rgba(255, 150, 90, 0.12);
+  overflow: hidden;
+}
+/* 사진은 열 폭을 채우고 높이는 카드 높이(최소 210px)에 맞춘다. 비율은 고정하지 않고 가로로 긴 모양으로 잘라 쓴다 */
+.daily-photo { position: relative; width: 100%; min-height: 210px; align-self: stretch; background: var(--cream-deep); }
+.daily-photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; }
+.daily-photo-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--coral);
+  background: linear-gradient(135deg, var(--coral-soft), var(--cream-deep));
+}
+.daily-body { padding: 16px 0 16px 30px; display: flex; flex-direction: column; min-width: 0; }
+.daily-label {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--coral-soft);
+  color: var(--coral);
+  font-size: 12px;
+  font-weight: 800;
+}
+/* 간격: 라벨 → 제목 8, 제목 → 지역 2 (붙게), 지역 → 설명 10, 설명 → 출처 8 */
+.daily-name { margin: 8px 0 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.25; color: var(--ink); }
+.daily-region { margin: 2px 0 0; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 600; font-size: 14px; }
+.daily-region-icon { display: inline-flex; color: var(--coral); }
+.daily-desc {
+  margin: 10px 0 0;
+  max-width: 600px; /* 한 줄 40~50자 */
+  color: var(--ink);
+  font-size: 15.5px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.daily-meta { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.daily-meta-sep { margin: 0 6px; }
+/* 버튼은 글 바로 옆(32px)에 세로로, 세로 가운데 */
+.daily-actions { display: flex; flex-direction: column; gap: 8px; padding: 16px 24px 16px 32px; }
+.daily-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 14px;
+  font-size: 13.5px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+/* 보조 버튼은 중립색 (강조색은 라벨과 주 버튼에만) */
+.daily-btn-line { background: var(--card); color: var(--ink); box-shadow: 0 0 0 1.5px var(--line); }
+.daily-btn-line:hover { box-shadow: 0 0 0 1.5px var(--muted); }
+
 /* ---------- features ---------- */
 .features {
   max-width: 1440px;
@@ -397,6 +474,10 @@ input[type='date'].field-input { cursor: pointer; }
   .hero-art { max-width: 680px; margin: 0 auto; }
   .features { grid-template-columns: repeat(2, 1fr); row-gap: 24px; }
   .feature:nth-child(3) { border-left: 0; padding-left: 0; }
+  .daily { grid-template-columns: clamp(240px, 32%, 340px) minmax(0, 1fr); }
+  .daily-photo { grid-row: span 2; }
+  .daily-body { padding: 16px 24px 4px 30px; }
+  .daily-actions { flex-direction: row; flex-wrap: wrap; padding: 6px 24px 16px 30px; }
 }
 
 @media (max-width: 720px) {
@@ -407,6 +488,13 @@ input[type='date'].field-input { cursor: pointer; }
   .headline { font-size: 38px; }
   .mode-tabs, .fields { grid-template-columns: 1fr; }
   .features { grid-template-columns: 1fr; padding: 8px 20px 40px; }
+  .daily-wrap { padding: 0 20px 16px; }
+  .daily { grid-template-columns: 1fr; } /* 사진 위, 글 아래 */
+  .daily-photo { width: 100%; height: 160px; min-height: 0; grid-row: auto; }
+  .daily-body { padding: 14px 16px 4px; }
+  .daily-name { font-size: 20px; }
+  .daily-desc { font-size: 14.5px; }
+  .daily-actions { flex-direction: row; flex-wrap: wrap; padding: 8px 16px 16px; }
   .feature { border-left: 0; padding-left: 0; }
   .footer { flex-direction: column; gap: 6px; padding: 16px 20px; }
 }

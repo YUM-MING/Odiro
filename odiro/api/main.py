@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
@@ -33,6 +33,7 @@ from odiro.api.schemas import (
     MOODS,
     CourseRequest,
     CourseResponse,
+    DailyPick,
     EditRequest,
     JobStarted,
     TraceStep,
@@ -118,6 +119,28 @@ def public_config() -> dict:
 @app.get("/api/moods")
 def moods() -> dict:
     return {"moods": list(MOODS)}
+
+
+@app.get("/api/daily-pick", response_model=DailyPick)
+def daily_pick(date: str | None = Query(None, description="YYYY-MM-DD. 생략하면 한국 시간 오늘")) -> DailyPick:
+    """오늘의 숨은 여행지. data/tour_intro.json 의 후보에서 날짜마다 한 곳 (외부 API 호출 없음)."""
+    from datetime import date as _date
+
+    from odiro.tools import daily_pick as dp
+
+    if date is None:
+        day = dp.today_kst()
+    else:
+        try:
+            day = _date.fromisoformat(date) if len(date) == 10 else None
+        except ValueError:
+            day = None
+        if day is None:
+            raise HTTPException(422, "date 는 YYYY-MM-DD 형식이어야 합니다")
+    pick = dp.pick_for(day)
+    if pick is None:
+        raise HTTPException(404, "추천 후보가 없습니다")
+    return DailyPick(**pick)
 
 
 # ---------- 동기 ----------

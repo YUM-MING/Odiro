@@ -51,10 +51,14 @@ def _match(name: str, lat: float, lng: float) -> dict[str, Any] | None:
     return best[1] if best else None
 
 
+# 이용 정보 칸 (scripts/build_intro_lookup.py FIELDS). 줄에는 이미지(img)·숨은 여행지 후보 필드(pick·cid·sd·sg·desc)도 있어 이 칸만 꺼낸다
+INTRO_FIELDS = ("rest_date", "use_time", "use_fee", "parking", "parking_fee")
+
+
 def find_intro(name: str, lat: float, lng: float) -> dict[str, str] | None:
-    """이름이 같고 300m 안에 있는 TourAPI 장소의 이용 정보. 없으면 None (이미지만 있는 줄도 None)."""
-    r = _match(name, lat, lng)
-    vals = {k: v for k, v in (r or {}).items() if k not in ("n", "lat", "lng", "img")}
+    """이름이 같고 300m 안에 있는 TourAPI 장소의 이용 정보. 없으면 None (이미지·후보 필드만 있는 줄도 None)."""
+    r = _match(name, lat, lng) or {}
+    vals = {k: r[k] for k in INTRO_FIELDS if r.get(k)}
     return vals or None
 
 

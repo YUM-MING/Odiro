@@ -3,6 +3,7 @@ import { useEffect, useState, type ComponentType } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getConfigCheck, getHealth, getMoods, MOODS, type ConfigCheck, type CourseRequest, type Health } from './api'
 import Builder from './Builder'
+import DailyPick from './DailyPick'
 import HeroScene from './HeroScene'
 import * as I from './Icons'
 import { MOCK_ENABLED } from './mock'
@@ -55,6 +56,12 @@ export default function App() {
     }
   }, [])
 
+  // 숨은 여행지 배너: 지역만 바꾸고 빌더로 올라간다 (코스는 만들지 않는다)
+  const applyRegion = (region: string) => {
+    setReq((r) => ({ ...r, region }))
+    document.getElementById('create')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   const go = (r: CourseRequest) => {
     saveRequest(r)
     saveCourse(null) // 새 조건이면 이전 코스는 버린다
@@ -73,7 +80,7 @@ export default function App() {
           <a href="#features">이용 가이드</a>
         </nav>
         <div className="header-actions">
-          <span className="header-note">수도권(서울·인천·경기) 우선 지원</span>
+          <span className="header-note">코스 추천은 수도권 우선 · 숨은 여행지는 전국</span>
         </div>
       </header>
 
@@ -111,6 +118,8 @@ export default function App() {
             <HeroScene />
           </div>
         </section>
+
+        <DailyPick onUseRegion={applyRegion} />
 
         <section className="features" id="features">
           {FEATURES.map(({ Icon, tone, title, desc }) => (
