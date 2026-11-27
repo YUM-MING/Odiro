@@ -49,7 +49,8 @@ export default function Builder({
     onChange({
       ...value,
       mode: m.mode,
-      days: m.mode === 'trip' ? Math.max(2, value.days) : 1,
+      // 당일 → 여행: 지금 날짜를 시작일로 1박 2일 / 여행 → 당일: 시작일만 남기고 1일 (date 는 그대로)
+      days: m.mode === 'trip' ? (value.mode === 'trip' ? Math.min(3, Math.max(2, value.days)) : 2) : 1,
       party: m.key === 'date' && !value.party ? '연인' : value.party,
     })
   }
@@ -109,19 +110,13 @@ export default function Builder({
             autoComplete="off"
           />
         </label>
-        <DatePicker value={value.date} onChange={(d) => set('date', d)}>
-          {value.mode === 'trip' && (
-            <select
-              className="field-select"
-              value={value.days}
-              onChange={(e) => set('days', Number(e.target.value))}
-              aria-label="여행 일수"
-            >
-              <option value={2}>1박 2일</option>
-              <option value={3}>2박 3일</option>
-            </select>
-          )}
-        </DatePicker>
+        {/* 여행: 시작일~종료일 기간 → date = 시작일, days = 2·3 / 그 외: 날짜 하나, days = 1 (요청 형식은 그대로) */}
+        <DatePicker
+          value={value.date}
+          days={value.days}
+          range={value.mode === 'trip'}
+          onChange={(date, days) => onChange({ ...value, date, days: value.mode === 'trip' ? days : 1 })}
+        />
         {value.mode === 'trip' && (
           <label className="field field-wide">
             <span className="field-icon"><I.Pin /></span>

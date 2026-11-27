@@ -241,7 +241,7 @@
 /* ---------- builder (검색 카드 안 / 드로어) ---------- */
 .builder { display: flex; flex-direction: column; gap: 12px; }
 
-.field-input, .field-select {
+.field-input {
   flex: 1;
   min-width: 0;
   border: 0;
@@ -252,7 +252,6 @@
   color: var(--ink);
 }
 .field-input::placeholder { color: var(--muted); font-weight: 500; }
-.field-select { flex: none; width: auto; color: var(--coral); font-weight: 700; cursor: pointer; }
 label.field { cursor: text; }
 label.field:focus-within { box-shadow: inset 0 0 0 1.5px var(--coral); }
 
@@ -274,6 +273,16 @@ label.field:focus-within { box-shadow: inset 0 0 0 1.5px var(--coral); }
 }
 .date-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .date-placeholder { color: var(--muted); font-weight: 500; }
+/* 여행 기간 표기: 칸 폭(컨테이너 내용 폭)에 따라 하나만 보인다 — "12월 1일 (화) – 12월 3일 (목)" → "12/1 (화) – 12/3 (목)" → "12/1 – 12/3" */
+.date-range-short, .date-range-tiny { display: none; }
+@container (max-width: 330px) {
+  .date-range-long { display: none; }
+  .date-range-short { display: block; }
+}
+@container (max-width: 240px) {
+  .date-range-short { display: none; }
+  .date-range-tiny { display: block; }
+}
 /* 오늘과의 차이 알약: 오늘 / N일 후 (예보 반영 날이면 노란 점) */
 .date-pill {
   flex: none;
@@ -360,6 +369,21 @@ label.field:focus-within { box-shadow: inset 0 0 0 1.5px var(--coral); }
 .dp-day:focus-visible .dp-num { box-shadow: 0 0 0 3px var(--coral-soft); }
 .dp-day.today:focus-visible .dp-num { box-shadow: inset 0 0 0 1.5px var(--coral), 0 0 0 3px var(--coral-soft); }
 .dp-day.past { color: var(--muted); opacity: 0.45; cursor: default; }
+/* 여행 기간: 시작·종료일은 코랄 원(.sel), 사이 날짜는 연한 코랄 띠로 이어서 */
+.dp-day.in-range::before, .dp-day.range-start::before, .dp-day.range-end::before {
+  content: "";
+  position: absolute;
+  top: 10%;
+  bottom: 10%;
+  left: 0;
+  right: 0;
+  background: var(--coral-soft);
+}
+.dp-day.range-start::before { left: 50%; }
+.dp-day.range-end::before { right: 50%; }
+.dp-day.in-range .dp-num, .dp-day.range-start .dp-num, .dp-day.range-end .dp-num { position: relative; }
+.dp-day.in-range:hover:not(:disabled) .dp-num { background: transparent; }
+.dp-range-note { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 .dp-dot { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--sun); }
 .dp-day .dp-dot { position: absolute; bottom: 4%; left: 50%; margin-left: -2px; }
 .dp-legend { margin: 8px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }

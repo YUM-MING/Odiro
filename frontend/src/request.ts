@@ -25,9 +25,12 @@ export function nextDay(from = new Date()): string {
   return localYmd(d)
 }
 
-/** 저장된 날짜가 오늘(브라우저 기준)보다 이전이면 날짜만 기본값(내일)으로 바꾼다. 다른 값은 그대로 */
+/** 저장된 날짜(여행이면 시작일)가 오늘(브라우저 기준)보다 이전이면 날짜만 기본값(내일)으로 바꾼다.
+ *  여행 일수는 기간 선택 범위(1박 2일~2박 3일)로, 그 외 모드는 1일로 맞춘다. 다른 값은 그대로 */
 export function withValidDate(r: CourseRequest, now = new Date()): CourseRequest {
-  return r.date < localYmd(now) ? { ...r, date: defaultRequest().date } : r
+  const days = r.mode === 'trip' ? Math.min(3, Math.max(2, r.days || 2)) : 1
+  const date = r.date < localYmd(now) ? defaultRequest().date : r.date
+  return date === r.date && days === r.days ? r : { ...r, date, days }
 }
 
 export function defaultRequest(): CourseRequest {
