@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -90,6 +91,70 @@ def test_pick_last_line_wins_and_region_names(tmp_path, monkeypatch):
     # 전남·광주는 코드가 같아 주소로 나눈다 (광주 북구는 광역시 자치구라 후보에서는 빠진다)
     assert bil.sido_short("12", "광주광역시 북구 금곡동") == "광주" and "pick" not in rows["무등산"]
     assert (rows["세종 호수"]["sd"], rows["세종 호수"]["sg"]) == ("세종", "")
+
+
+def test_sigungu_from_address_forms():
+    bil = _bil()
+    cases = {
+        "전라남도 곡성군 오곡면": "곡성군",
+        "전남 곡성군 곡성읍": "곡성군",
+        "전남광주통합특별시 곡성군 입면 청계동로": "곡성군",
+        "곡성군 곡성읍 신기리 산 190-1": "곡성군",  # 시도 없이 시군구로 시작
+        "전북특별자치도 전주시 완산구 효자동": "전주시",
+        "전라북도 김제시 죽산면": "김제시",
+        "강원특별자치도 강릉시 주문진읍": "강릉시",
+        "경상북도 경주시 진현동": "경주시",
+        "충청남도 공주시 웅진동": "공주시",
+        "닫기 경상북도 영덕군 영해면": "영덕군",  # 앞에 잡음이 붙은 주소
+        "세종특별자치시 조치원읍": "",
+        "제주특별자치도": "",
+        "": "",
+    }
+    for addr, sg in cases.items():
+        assert bil.sigungu_name(addr) == sg, addr
+    # 전남·광주(코드 12): 통합 뒤 주소 접두어가 같아 시군구로 가른다
+    assert bil.sido_short("12", "전남광주통합특별시 북구 금곡동", "북구") == "광주"
+    assert bil.sido_short("12", "전남광주통합특별시 곡성군 입면", "곡성군") == "전남"
+    assert bil.sido_short("12", "곡성군 곡성읍", "곡성군") == "전남"
+    assert bil.sido_short("52", "전북특별자치도 전주시", "전주시") == "전북"
+    assert bil.sido_short("51", "강원특별자치도 강릉시", "강릉시") == "강원"
+
+
+def test_pick_sigungu_from_code_and_skip_unknown(tmp_path, monkeypatch):
+    bil = _bil()
+    tour = tmp_path / "tour"
+    tour.mkdir()
+    _write(tour, "12", [
+        # 같은 시군구 코드(720)의 다른 장소 주소에서 '곡성군' 을 알아내 시도 없는 주소에도 쓴다 (코드 기반 우선)
+        _place("1", "국립곡성치유의숲", sido="12", addr="전남광주통합특별시 곡성군 곡성읍 청계동로 519", sigungu_code="720"),
+        _place("2", "청계동계곡", sido="12", addr="곡성군 곡성읍 신기리 산 190-1", sigungu_code="720"),
+        _place("3", "무등산 자락", sido="12", addr="전남광주통합특별시 북구 금곡동", sigungu_code="170"),  # 광주 자치구 → 제외
+        _place("4", "주소 없는 곳", sido="12", addr="", sigungu_code=""),  # 시군구를 못 얻음 → 후보 제외
+    ], {"1": LONG, "2": LONG, "3": LONG, "4": LONG})
+    _write(tour, "36110", [_place("5", "세종 호수", sido="36110", addr="세종특별자치시 연기면 세종리", sigungu_code="")], {"5": LONG})
+    monkeypatch.setattr(bil, "TOUR_DIR", tour)
+    monkeypatch.setattr(bil, "SIGUNGU_DIRS", ())  # 공식 코드표 없이
+    rows = {r["n"]: r for r in bil.build()}
+    assert (rows["청계동계곡"]["sd"], rows["청계동계곡"]["sg"]) == ("전남", "곡성군")
+    assert (rows["국립곡성치유의숲"]["sd"], rows["국립곡성치유의숲"]["sg"]) == ("전남", "곡성군")
+    assert "pick" not in rows["무등산 자락"]  # '전남 북구' 로 잘못 들어가지 않고 광주 자치구로 빠진다
+    assert "주소 없는 곳" in rows and "pick" not in rows["주소 없는 곳"]  # 이미지 조회 줄은 남고 후보만 빠진다
+    assert bil.SKIPPED_NO_SIGUNGU == {"전남": 1}
+    assert (rows["세종 호수"]["sd"], rows["세종 호수"]["sg"]) == ("세종", "")  # 세종은 시군구 없이 유지
+
+
+def test_pick_official_sigungu_table_first(tmp_path, monkeypatch):
+    bil = _bil()
+    tour = tmp_path / "tour"
+    tour.mkdir()
+    sgdir = tmp_path / "sigungu"
+    sgdir.mkdir()
+    (sgdir / "sigungu_47.json").write_text(json.dumps([{"code": "111", "name": "포항시 남구"}], ensure_ascii=False), encoding="utf-8")
+    _write(tour, "47", [_place("1", "호미곶", sido="47", addr="호미곶면 대보리", sigungu_code="111")], {"1": LONG})  # 주소로는 못 얻음
+    monkeypatch.setattr(bil, "TOUR_DIR", tour)
+    monkeypatch.setattr(bil, "SIGUNGU_DIRS", (sgdir,))
+    rows = {r["n"]: r for r in bil.build()}
+    assert (rows["호미곶"]["sd"], rows["호미곶"]["sg"]) == ("경북", "포항시")  # 공식 코드표 이름(첫 단어)
 
 
 def test_pick_excludes_metro_districts_only(tmp_path, monkeypatch):
@@ -197,10 +262,10 @@ def client(tmp_path, monkeypatch):
         p = tmp_path / "tour_intro.json"
         p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
         monkeypatch.setattr(tour_intro, "PATH", p)
-        dp._order.cache_clear()
+        dp._orders.cache_clear()
 
     yield TestClient(main.app), use
-    dp._order.cache_clear()
+    dp._orders.cache_clear()
 
 
 def test_daily_pick_endpoint(client, monkeypatch):
@@ -223,5 +288,89 @@ def test_daily_pick_404_without_candidates(client, tmp_path, monkeypatch):
     use([{"n": "후보 아님", "lat": 1, "lng": 1, "img": IMG}])
     assert c.get("/api/daily-pick", params={"date": "2026-11-26"}).status_code == 404
     monkeypatch.setattr(tour_intro, "PATH", tmp_path / "none.json")
-    dp._order.cache_clear()
+    dp._orders.cache_clear()
     assert c.get("/api/daily-pick").status_code == 404
+
+
+# ---------- 계절 필터: 추운 달에는 물놀이 위주 장소를 건너뛴다 ----------
+
+
+def _seq(names_wet):
+    return [{"n": n, "lat": 37.0, "lng": 128.0, "img": IMG, "pick": 1, "cid": str(i), "sd": "강원", "sg": f"군{i}", "desc": "소개",
+             **({"wet": 1} if wet else {})} for i, (n, wet) in enumerate(names_wet)]
+
+
+def _days(start, n):
+    import datetime as _dt
+    return [start + _dt.timedelta(days=i) for i in range(n)]
+
+
+def test_cold_month_uses_order_without_wet_places():
+    import datetime as _dt
+    seq = _seq([("용담계곡", True), ("합강정", False), ("망상해수욕장", True), ("청령포", False), ("월정사", False), ("옥계해변", True)])
+    cold = [r["n"] for r in dp.cold_order(seq)]
+    assert cold == ["합강정", "청령포", "월정사"]  # 전체 순서에서 물놀이만 뺀 상대 순서 그대로
+    dec = _days(_dt.date(2026, 12, 1), 30)
+    names = [dp.pick_for(d, seq)["name"] for d in dec]
+    assert not {"용담계곡", "망상해수욕장", "옥계해변"} & set(names)  # 추운 달에는 물놀이 장소 없음
+    assert all(a != b for a, b in itertools.pairwise(names))  # 연속 날짜에 같은 장소가 연달아 나오지 않음
+    assert len(set(names[:3])) == 3  # 한 바퀴(추운 달 순서 길이) 동안 중복 없음
+    assert [dp.pick_for(d, seq)["name"] for d in dec] == names  # 같은 날짜 같은 결과
+    for d in _days(_dt.date(2027, 3, 1), 31):  # 3월도 추운 달
+        assert not dp.is_wet({"n": dp.pick_for(d, seq)["name"]})
+    jul = _days(_dt.date(2027, 7, 1), 6)
+    assert {dp.pick_for(d, seq)["name"] for d in jul} == {r["n"] for r in seq}  # 7월은 계곡 포함 전체 순서
+    d = _dt.date(2027, 7, 10)
+    assert dp.pick_for(d, seq)["name"] == seq[(d - dp.PICK_EPOCH).days % len(seq)]["n"]
+
+
+def test_cold_order_in_memory_and_no_repeat_on_real_order(tmp_path, monkeypatch):
+    import datetime as _dt
+    rows = _rows(SPEC)
+    for r in rows[::3]:
+        r["wet"] = 1
+    p = tmp_path / "tour_intro.json"
+    p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(tour_intro, "PATH", p)
+    dp._orders.cache_clear()
+    full, cold = dp._orders()
+    assert len(full) == 30 and len(cold) == 20 and not any(dp.is_wet(r) for r in cold)
+    assert dp._orders() is dp._orders()  # 한 번 만들어 메모리에 둔다
+    picks = [dp.pick_for(d)["content_id"] for d in _days(_dt.date(2026, 12, 1), 20)]
+    assert len(set(picks)) == 20  # 한 바퀴 동안 중복 없음
+    dp._orders.cache_clear()
+
+
+def test_wet_by_name_and_waterfall_kept():
+    import datetime as _dt
+    seq = _seq([("동강 래프팅 계곡", False), ("비룡폭포 계곡", False), ("오대산 해변", False), ("옥계 물놀이장", False), ("월정사", False)])
+    assert dp.is_wet(seq[0]) and dp.is_wet(seq[2]) and dp.is_wet(seq[3])  # 표시가 없는 옛 파일도 이름으로 판별
+    assert not dp.is_wet(seq[1]) and not dp.is_wet(seq[4])  # 폭포는 빼지 않는다
+    assert [r["n"] for r in dp.cold_order(seq)] == ["비룡폭포 계곡", "월정사"]
+    assert {dp.pick_for(d, seq)["name"] for d in _days(_dt.date(2026, 12, 1), 10)} == {"비룡폭포 계곡", "월정사"}
+
+
+def test_all_wet_falls_back_to_original():
+    seq = _seq([("A계곡", True), ("B해수욕장", True)])
+    import datetime as _dt
+    day = _dt.date(2026, 12, 2)
+    base = seq[(day - dp.PICK_EPOCH).days % 2]["n"]
+    assert dp.cold_order(seq) == ()
+    assert dp.pick_for(day, seq)["name"] == base  # 추운 달 순서가 비면 전체 순서로 폴백 (배너가 비지 않게)
+
+
+def test_build_marks_wet_candidates(tmp_path, monkeypatch):
+    bil = _bil()
+    tour = tmp_path / "tour"
+    tour.mkdir()
+    _write(tour, "51", [
+        _place("1", "용담계곡", lcls3="NA010400"),
+        _place("2", "망상", lcls3="NA020900"),  # 이름에 단어가 없어도 분류 코드로
+        _place("3", "옥계 물놀이장", lcls3=""),  # 분류가 없으면 이름으로
+        _place("4", "구룡폭포", lcls3="NA010400"),  # 폭포는 아님
+        _place("5", "청령포", lcls3="HS010100", lcls1="HS"),
+    ], {k: LONG for k in "12345"})
+    monkeypatch.setattr(bil, "TOUR_DIR", tour)
+    rows = {r["n"]: r for r in bil.build()}
+    assert {n for n, r in rows.items() if r.get("wet")} == {"용담계곡", "망상", "옥계 물놀이장"}
+    assert all(r.get("pick") for r in rows.values())
