@@ -374,3 +374,103 @@ gh workflow run deploy --repo YUM-MING/Odiro      # 또는 아무 커밋이나 p
 - [x] `.env`·데이터가 git 에 안 들어갔는지 확인
 - [ ] 데이터 tgz — 해당 없음 (0주차)
 - [x] 다음 담당자에게 알림 (이 대화)
+
+---
+
+## 3주차 결과 (최종) (담당: chaehyewon, 기간: 11/21 ~ 11/27)
+
+다음 인수인계는 없다. 발표·제출용 최종 정리다. 아래는 커밋 기록(`git log --since=2026-11-21`), 코드, [STABILITY_REPORT.md](STABILITY_REPORT.md) 로 확인한 사실만 적는다.
+기간 내 커밋 작성자는 `chaeheywon` 한 명뿐이다 (다른 작성자 커밋 없음).
+
+### 1. 3주차 작업 전체 (커밋 24개, 주제별)
+
+**안정화·배포**
+
+| 커밋 | 무엇이 좋아졌나 | 관련 파일 |
+|---|---|---|
+| `e1ce043` | 배포 서버에서도 "성수동"·"수원 장안구" 같은 시군구 이름을 해석한다 (시군구 코드표를 `data/sigungu/` 로 git 에 포함). ruff 지적 정리 | `data/sigungu/*.json`, `odiro/tools/rag_search.py`, `odiro/agent/nodes.py`, `scripts/build_intro_lookup.py`, `tests/test_sigungu_deploy.py`, `tests/test_ingest_sync.py` |
+| `9fdf664` | 서버가 뜰 때 벡터 DB 를 미리 올려(예열) 첫 요청이 덜 느리다 (`/api/health` 에 `warmup` 상태). 판단 기록을 trace `debug` 로 분리, 장소 대표 이미지 표시, 답변 설명 중복 제거 | `Dockerfile`, `.github/workflows/deploy.yml`, `odiro/api/main.py`, `odiro/api/schemas.py`, `odiro/agent/run.py`, `odiro/agent/nodes.py`, `odiro/tools/rag_search.py`, `odiro/tools/tour_intro.py`, `scripts/build_intro_lookup.py`, `tests/test_api_warmup.py`, `tests/test_tour_intro.py` |
+| `aa4b8d8` | 배포 서버에 사이트와 같은 순서로 코스를 요청해 실패율·시간을 재는 도구와 실패율 리포트 (29/29 성공). 평가 표의 미확인 값 표시 보완 | `scripts/stability_test.py`, `tests/test_stability_test.py`, `docs/STABILITY_REPORT.md`, `scripts/eval_courses.py`, `tests/test_eval_courses.py` |
+
+**코스 품질**
+
+| 커밋 | 무엇이 좋아졌나 | 관련 파일 |
+|---|---|---|
+| `a224083` | 카카오 업종 분류로 식당·카페를 가려내고, 이름만 다른 같은 가게가 두 번 들어가지 않는다. 카페·식당·볼거리가 빠진 날을 보충 | `odiro/agent/nodes.py`, `odiro/tools/search_place.py`, `tests/test_agent_nodes.py` |
+| `8d4bdfa` | 점심·저녁 시간이 자연스럽게 맞춰지고, 저녁이 비면 저녁 식당을 보충 | `odiro/agent/nodes.py`, `tests/test_agent_nodes.py` |
+| `b53eb77` | 식사 시각 보정을 다듬고, 새로 넣은 장소의 이동 시간이 너무 길면 넣지 않는다 | `odiro/agent/nodes.py`, `odiro/agent/state.py`, `tests/test_agent_nodes.py` |
+| `588c76d` | 해 진 뒤 야외·입장 마감 뒤 도착 같은 시간대 문제를 줄이고, 비 예보 기준(강수확률·강수량)을 다듬음. 웹 검색(Tavily) 한도 초과 때 멈춤 처리로 불필요한 호출 감소 | `odiro/agent/nodes.py`, `odiro/tools/get_weather.py`, `odiro/tools/summarize_reviews.py`, `tests/test_weather_rule.py`, `tests/test_tavily_guard.py` |
+| `fb3a1aa` | 프랜차이즈는 일반 가게가 없을 때만 쓰고(후순위), 자동으로 채우는 자리에 술집이 들어가지 않는다 | `odiro/agent/nodes.py`, `tests/test_agent_nodes.py` |
+| `59a9792` | 카드의 '바꾸기'는 원래 자리(순서)를 유지하고, 전체를 다시 짜는 수정에도 요청 내용이 반영된다 | `odiro/agent/nodes.py`, `tests/test_agent_nodes.py` |
+
+**화면**
+
+| 커밋 | 무엇이 좋아졌나 | 관련 파일 |
+|---|---|---|
+| `2048f17` | 프리셋 날짜, 입력칸, 지도 전체 보기, 모바일 헤더·빈 공간, 지난 날짜 보정 버그 수정 | `frontend/src/App.tsx`, `Builder.tsx`, `MapView.tsx`, `Plan.tsx`, `request.ts`, `App.css`, `Plan.css` |
+| `6e8ba42` | 서버 끊김·시간 초과를 감지해 다시 시도를 안내하고, 사용자용 오류 문구로 바꿈. 연결 실패 때 예시 코스를 실제처럼 보여 주지 않음 | `frontend/src/api.ts`, `Plan.tsx`, `Progress.tsx`, `App.tsx`, `MapView.tsx`, `App.css` |
+| `4901af2` | '바꾸기' 뒤에도 보던 Day 탭이 유지되고, 지도 정보 창에 장소 사진이 나온다 | `frontend/src/Plan.tsx`, `MapView.tsx`, `Plan.css` |
+| `b2ee74f` | 답변 끝에 붙던 장소 목록 조각을 숨기고, 빠른 수정 버튼을 코스 상황에 맞게 보여 준다 | `frontend/src/Plan.tsx`, `markdown.ts`, `quick.ts` |
+| `a1d449c` | 이전 답변의 장소 꼬리 조각도 합쳐서 깔끔하게 보인다 | `frontend/src/Plan.tsx`, `markdown.ts` |
+| `9a8ac8a` | 직접 만든 달력 팝업(날씨 예보 반영 날 표시), 이용 가이드 섹션 개편, 숨은 여행지 배너 정리, 총 인원 입력 버그 수정, 기본 출발일을 내일로 (측정 스크립트의 기본 날짜 함수도 맞춤) | `frontend/src/DatePicker.tsx`, `Guide.tsx`, `Builder.tsx`, `App.tsx`, `DailyPick.tsx`, `Icons.tsx`, `request.ts`, `App.css`, `scripts/stability_test.py`, `tests/test_stability_test.py` |
+| `e5b2e45` | 여행 모드는 달력에서 시작일~종료일을 기간으로 고른다 (최대 2박 3일, 서버로는 date·days 그대로) | `frontend/src/DatePicker.tsx`, `Builder.tsx`, `request.ts`, `App.css` |
+
+**숨은 여행지 (데이터·화면)**
+
+| 커밋 | 무엇이 좋아졌나 | 관련 파일 |
+|---|---|---|
+| `37557b1` | 메인 화면 "오늘의 숨은 여행지" 배너: 관광 수요가 덜 몰리는 지역의 TourAPI 관광지를 날짜마다 한 곳 소개, '이 지역으로 코스 만들기' (`GET /api/daily-pick`) | `scripts/build_intro_lookup.py`, `odiro/tools/daily_pick.py`, `odiro/tools/tour_intro.py`, `odiro/api/main.py`, `odiro/api/schemas.py`, `frontend/src/DailyPick.tsx`, `App.tsx`, `api.ts`, `mock.ts`, `request.ts`, `App.css`, `docs/API_SCHEMA.md`, `tests/test_daily_pick.py` |
+| `0044c6a` | 시도 없는 주소·통합 주소에서도 시군구를 찾고(광주 자치구 오분류 수정), 추운 달(11~3월)에는 계곡·해수욕장 같은 물놀이 장소를 소개하지 않는다 | `scripts/build_intro_lookup.py`, `odiro/tools/daily_pick.py`, `tests/test_daily_pick.py` |
+
+**평가·측정 도구** (`scripts/eval_courses.py`, `tests/test_eval_courses.py`)
+
+| 커밋 | 무엇이 좋아졌나 |
+|---|---|
+| `5ddd7ce` | 같은 가게 중복·분류 의심 지표, 경고 문구 저장, 가평 프리셋 시나리오, 결과 덮어쓰기 방지, 여러 결과 합쳐 보기(`--summarize`) |
+| `ca28082` | 식사 시각, 일정 조기 종료 지표 |
+| `6c81386` | 실행 기록(trace) 저장 |
+| `9312f13` | 판단 기록(trace debug) 저장 |
+| `3e4da70` | 해 진 뒤 야외, 입장 마감 뒤 도착, 늦은 점심, 비 예보 규칙, 식당 직전 장거리 이동, 웹 검색 건수 지표 |
+| `18e07d7` | 체인 수(사용자 지정 구분), 자동 보충 술집 수 지표 |
+
+**문서**: `docs/STABILITY_REPORT.md` (`aa4b8d8`), `docs/API_SCHEMA.md` 의 `/api/daily-pick` (`37557b1`), `docs/TEAM_ROLES.md` (`e1ce043`). 이 절과 README·API_SCHEMA 정리는 커밋 전 작업이다.
+
+**숫자 요약**
+
+- 3주차 커밋: 24개 (모두 chaeheywon)
+- 테스트: 3주차 시작 시점 141 passed (2주차 → 3주차 인수인계 기록) → 현재 369 passed
+- 안정화 측정 (11/24, 배포 서버): 29/29 성공. 연속 20회 평균 35.7초(최대 49.6초), 동시 3개 평균 43.8초, 동시 5개 평균 54.5초·최대 64.6초. 실패 0건 ([STABILITY_REPORT.md](STABILITY_REPORT.md))
+
+### 2. 시연 시나리오
+
+| 종류 | 입력 | 비고 |
+|---|---|---|
+| 데이트 | 성수 — 프리셋 "# 성수동 데이트" | |
+| 당일치기 | 수원 — 프리셋 "# 수원 화성 레트로" | |
+| 여행 | 전주 2박 3일 — 직접 입력 (여행 코스 → 지역 "전주" → 달력에서 시작일~종료일 3일) | 실측 약 80초. 상세 조건 예산 25~30만 원 |
+
+### 3. 발표 당일 운영 체크리스트
+
+- [ ] **전날 밤 또는 당일 아침**: GitHub → Actions → `deploy` → Run workflow 로 서버를 새로 띄우고, 프리셋 하나로 코스가 정상으로 나오는지 확인한다.
+- [ ] **당일**: Actions → `daily-ingest` 를 그날만 Disable 한다 (06:30 수집 뒤 자동 배포가 발표 중에 돌지 않게). 발표가 끝나면 다시 Enable.
+- [ ] **발표 직전**: 시연할 세 코스를 발표 때와 같은 조건(날짜·예산·태그)으로 한 번씩 미리 만들어 둔다. 같은 서버에서 같은 조건은 결과 캐시로 바로 나온다.
+- [ ] 전주 2박 3일은 상세 조건 예산을 25~30만 원으로 둔다 (10만 원이면 예산 초과 경고가 뜬다).
+- [ ] 인터넷 문제 대비: 시연 영상을 준비해 둔다.
+
+### 4. 한계와 향후 과제
+
+- 블로그 큐레이션 데이터는 수도권(서울·인천·경기)만 있다. 지방은 한국관광공사 데이터·웹 검색·지도 검색 기반이다.
+- 지방 지역 요청에서 수도권 블로그 글이 프롬프트에 섞일 수 있다.
+- 여행은 최대 2박 3일 (생성 시간 때문). Cloud Run timeout 120초 < 사이트 스트림 제한 150초. max-instances 1 (작업 상태가 서버 메모리에 있어 늘리면 스트림 요청이 다른 인스턴스로 갈 수 있다).
+- 여행 일정의 긴 자유 시간 경고, 식당 직전 장거리 이동은 남을 수 있다. 시간대 틀로 순서를 정한 일정(`fixed_order`)은 일부 보정을 건너뛴다. 보충 경로로 들어간 장소는 예상 비용이 0 으로 잡힌다.
+- 숨은 여행지는 daily-ingest 가 `tour_intro.json` 을 다시 만든 뒤 배포돼야 반영되고, 후보가 바뀌면 날짜별 순서가 다시 섞인다.
+- 무장애 여행 정보는 수집하지 않았다.
+
+### 5. 제출 전 남은 일
+
+- [ ] 교수님 제출용 프로젝트 폴더 정리 (아직 하지 않음)
+  - 제출용 안내 문서: 새 md 를 만들거나 README 를 다듬어 프로젝트 소개·실행 방법·폴더 구조·팀 역할을 정리
+  - 불필요한 파일 정리: 쓰지 않는 스크립트·문서·임시 파일 확인 후 삭제
+  - 제출 폴더에서 빠져야 할 것 확인: `.env`(API 키), `cache/`, `data/raw/`, `data/vectorstore/`, `*.tgz` 등 비밀·대용량 파일. 압축 전에 따로 점검
+- [ ] 발표 자료(PPT) 마무리, 시연 영상 녹화
+- [ ] 모바일 화면 최종 확인

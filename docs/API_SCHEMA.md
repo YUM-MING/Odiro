@@ -7,7 +7,7 @@
 
 | 메서드 | 경로 | 용도 |
 |---|---|---|
-| GET | `/api/health` | 헬스체크 `{status, version}` |
+| GET | `/api/health` | 헬스체크 `{status, version, warmup}`. `warmup` = 시작 때 벡터 DB 예열 상태 `off`(로컬)·`running`·`done`·`error` |
 | GET | `/api/public-config` | `{kakao_js_api_key}` — 프론트 지도 SDK 로드용 |
 | GET | `/api/config-check` | `{ready, missing[]}` — 비어 있는 API 키 이름 (값은 노출하지 않음) |
 | GET | `/api/moods` | 분위기 태그 목록 `{moods: string[]}` |
@@ -115,8 +115,13 @@
 }
 ```
 
-후보는 `scripts/build_intro_lookup.py` 가 `data/tour_intro.json` 에 표시한 TourAPI 관광지(수도권·부산·제주 제외, 자연·인문, 사진·소개글 있음).
-서버는 시군구를 돌아가며 고르는 고정 순서에서 날짜마다 한 곳을 준다(같은 날짜 = 같은 장소). 외부 API 호출 없음.
+후보는 `scripts/build_intro_lookup.py` 가 `data/tour_intro.json` 에 표시한 TourAPI 관광지:
+- 수도권·부산·제주 제외, 자연·인문 관광지, 사진·소개글 있음
+- 광역시(대구·대전·울산·광주)의 자치구(이름이 '구')는 제외. 광역시의 군(예: 대구 달성군, 울산 울주군)과 세종은 유지
+- 시군구를 얻지 못한 장소는 제외 (시군구 코드 → 주소 순으로 찾는다. 세종은 시군구 없이 유지)
+
+서버는 시군구를 돌아가며 고르는 고정 순서에서 날짜마다 한 곳을 준다(같은 날짜 = 같은 장소). 추운 달(11~3월)에는 이 순서에서
+물놀이 장소(계곡·해수욕장·해변·물놀이장·워터파크, 폭포는 제외하지 않음)를 뺀 순서에서 고른다 (모두 물놀이 장소면 전체 순서). 외부 API 호출 없음.
 
 ## SSE (`GET /api/course/stream/{job_id}`)
 

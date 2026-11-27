@@ -24,7 +24,7 @@ py -3.12 -m venv .venv
 pip install -e ".[dev]"
 Copy-Item .env.example .env        # 키 채우기 (팀 메신저 비공개 노트의 완성본). TourAPI 는 일반 인증키(Decoding)
 python scripts/check_apis.py       # 전부 OK 인지
-pytest                             # 83 passed (네트워크 없음)
+pytest                             # 369 passed (네트워크 없음)
 uvicorn odiro.api.main:app --reload   # http://localhost:8000/docs
 
 # 2) 프론트 (새 터미널)
@@ -34,11 +34,14 @@ npm run dev                        # http://localhost:5173 (/api 는 8000 으로
 #   백엔드 없이 UI 만 보려면: $env:VITE_MOCK="1"; npm run dev   (예시 코스로 동작)
 ```
 
-데이터(`data/raw`, `data/vectorstore` 약 740MB, `cache`)는 git 에 없다. 인수인계 문서 7번의 tgz 두 개를 받아 레포 루트에서 푼다.
+데이터(`data/raw`, `data/vectorstore`, `cache`)는 git 에 없다. 기준은 GCS 버킷 `gs://odiro-where-data/` 이고,
+`daily-ingest` 워크플로가 매일 06:30(KST) 수집한 뒤 `ingest-data.tgz`·`vectorstore.tgz`·`tour_intro.json` 을 올린다 (권한은 GCP 프로젝트 담당에게 요청).
+로컬에서 수집(`daily_ingest.py`)을 돌리지 않는다 — 버킷 데이터와 갈라진다. 자세한 건 [docs/HANDOVER.md](docs/HANDOVER.md) 2주차 → 3주차 3·7번.
 
 ```bash
-tar xzf odiro-data-20261113.tgz            # data/raw + cache/ingest_state (수집 진행 상태)
-tar xzf vectorstore-20261113.tgz -C data/  # data/vectorstore
+gcloud storage cp gs://odiro-where-data/ingest-data.tgz . && tar xzf ingest-data.tgz          # data/raw + cache/ingest_state
+gcloud storage cp gs://odiro-where-data/vectorstore.tgz . && tar xzf vectorstore.tgz -C data/ # data/vectorstore
+gcloud storage cp gs://odiro-where-data/tour_intro.json data/                                  # 이용 정보·숨은 여행지 조회 파일
 ```
 
 ## 코스 생성 (CLI / API)
@@ -54,7 +57,7 @@ python scripts/warm_demo_cache.py --date 2026-11-29   # 시연 시나리오 3개
 
 - 파이프라인: `parse_intent → retrieve(RAG ∥ 웹 ∥ 날씨 ∥ 일출 ∥ 주변 식당·카페·숙소) → draft_course → verify_places(카카오 실존 검증·보충) → optimize_route → enrich(리뷰·주차장) → compose_answer`
 - 수정: `modify → verify_places → optimize_route → enrich → compose_answer` (바꾸는 자리만 다시 검증)
-- 생성 50~90초, 수정 15~35초 (11/12 라이브 측정). 같은 조건은 7일 캐시(`cache/tools`)라 두 번째부터 즉시
+- 생성 시간 (11/24 배포 서버 측정, [docs/STABILITY_REPORT.md](docs/STABILITY_REPORT.md)): 연속 20회 평균 35.7초(최대 49.6초), 동시 5개 최대 64.6초 — 29건 전체 최대 64.6초, 29/29 성공. 여행 2박 3일은 실측 약 80초. 수정 15~35초 (11/12 라이브 측정). 같은 조건은 7일 캐시(`cache/tools`)라 두 번째부터 즉시
 - API: `POST /api/course/start` → `GET /api/course/stream/{job}` (SSE 진행 상태) / `POST /api/course/edit/start`. 상세 [docs/API_SCHEMA.md](docs/API_SCHEMA.md)
 - 에이전트가 지키는 규칙(프랜차이즈 제외, 비 예보 실내 전환, 숙소·식사 배치 등)은 `odiro/agent/nodes.py` 와 `tests/test_agent_nodes.py` 가 기준
 
